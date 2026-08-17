@@ -435,8 +435,13 @@ function QueryJumpPanel({
     try {
       if (typeof idxInAll === 'number') {
         setActiveIdx(idxInAll)
+        // 仅锁定阅读线高亮，不阻挡列表悬停收起
         pinUntilRef.current = Date.now() + Math.max(JUMP_PIN_MS, SCROLL_HOLD_MS)
       }
+      // 点选后收起列表，方便看跳转结果
+      hoverRef.current = false
+      clearCollapse()
+      setOpen(false)
       let row = findRowByMsgId(msgId)
       if (!row) {
         let face: any = null
