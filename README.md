@@ -169,38 +169,46 @@ dsh --profile web --dump-config
 
 | 操作 | 行为 |
 | --- | --- |
-| 发送用户消息 | 侧栏追加一条预览（截断显示，悬停看全文） |
-| 点击某条 Query | 对话区滚到对应气泡并蓝色描边高亮约 1.2 秒 |
-| 点击较早的历史 | 若消息未入窗，会先 `loadOlder` 再跳转 |
-| 勾选 / 取消「启用」 | 关闭后停止采集（面板留窄条可再开）；开启后可继续查看已有索引 |
-| 「清空本会话列表」 | 仅对本会话做展示屏蔽（mask），聊天记录不受影响 |
-| 切换会话 | 列表自动换成当前会话内容 |
+| 鼠标移到对话区右缘 | 滑出「提问记录」（平时几乎不可见） |
+| 点击某条提问 | 平滑滚到对应气泡并短暂高亮 |
+| 点击较早历史 | 必要时先 `loadOlder` 再跳转 |
+| 「清空」 | 仅屏蔽本插件列表（mask），不删聊天 |
+| 切换会话 | 自动换列表；磁盘缓存按会话隔离 |
+| `enable: false` | 完全不渲染，零存在感 |
 
 ---
 
-## 配置项
+## 配置项（开关放设置 / Config）
 
-安装时由 `cordis.patch.yml` 写入默认配置，也可在 profile 中覆盖：
+面板内**已去掉常驻开关**，避免显示疲劳。请用配置控制：
 
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `enable` | `boolean` | `true` | 功能总开关；面板勾选会通过 RPC 持久化（若 settings 可用） |
-| `maxQuery` | `number` | `200` | 单会话最多保留条数，超出丢弃最早 |
-| `includeSteering` | `boolean` | `false` | 预留：是否纳入 steering 类用户消息 |
+| `enable` | `boolean` | `true` | 总开关；关闭后前端完全不渲染 |
+| `maxQuery` | `number` | `200` | 单会话最多保留条数 |
+| `includeSteering` | `boolean` | `false` | 是否纳入 steering |
 
 ```yaml
-# cordis.patch.yml（摘要）
+# cordis.patch.yml / profile 配置
 - insert:
   - id: query-jump
     name: dsh-query-jump
     config:
       enable: true
       maxQuery: 200
-      includeSteering: false
 ```
 
-> **关于 Web「设置 → 插件配置」**  
-> 当前 DSH 对第三方 settings 命名空间有白名单限制，卡片可能不出现。日常请用 **面板内开关**；Host 仍会尝试 `settings.register('dsh-query-jump')` 做本机持久化。上游开放 `expose` 后可无缝挂到设置页。
+Host 会 `settings.register('dsh-query-jump')` 并尝试 `expose: true`。  
+若本机 DSH 的 Web「设置→插件配置」仍有白名单限制，卡片可能暂不出现——**用上面的 `config.enable` 即可**，效果等同设置开关。
+
+### 定位数据会丢吗？
+
+| 场景 | 结果 |
+| --- | --- |
+| 重启 `dsh web` | **不丢**：投影可从会话日志重建；索引另存 `~/.dsh/storages/query-jump/` |
+| 更新 / 重装插件 | **一般不丢**（磁盘目录仍在） |
+| 点「清空」 | 只写 mask，聊天原文还在 |
+| 删掉整个 `~/.dsh` | 插件缓存没了；会话消息仍在时，投影仍可重建列表 |
 
 ---
 
@@ -209,14 +217,14 @@ dsh --profile web --dump-config
 ```
 dsh-query-jump/
 ├── src/
-│   ├── index.ts      # Host：投影 / 增量索引 / RPC / settings
-│   ├── client.tsx    # Client：shell.overlay 面板与跳转
-│   └── text.ts       # 纯函数：摘要、过滤、投影 apply（可单测）
-├── lib/              # 构建产物（index.js + client.js）
-├── test/             # node:test 单元测试
-├── fh/               # 完整设计文档
-├── build.mjs         # esbuild 双半构建（Client 含 __ModuleLoader__）
-├── cordis.patch.yml  # profile bundle 补丁
+│   ├── index.ts      # Host：投影 / 持久化 / RPC / settings
+│   ├── client.tsx    # Client：通义风悬停面板
+│   ├── persist.ts    # ~/.dsh/storages/query-jump 落盘
+│   └── text.ts       # 纯函数
+├── lib/
+├── test/
+├── build.mjs
+├── cordis.patch.yml
 ├── package.json
 └── README.md
 ```

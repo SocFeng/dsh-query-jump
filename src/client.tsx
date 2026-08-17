@@ -1,10 +1,10 @@
 /**
- * dsh-query-jump — browser half.
+ * dsh-query-jump — browser half（通义风 / 低存在感）
  *
- * UX:
- * - 默认收起：贴在对话区右缘的窄条（不常驻大面板）
- * - 鼠标悬停窄条 / 面板时展开完整列表
- * - 位置跟随 `[data-conversation-scroll]` 右边界，侧栏（Explorer 等）打开时自动内收，不被遮挡
+ * - 默认几乎不可见：对话区右缘一条透明热区
+ * - 鼠标靠近热区才滑出提问列表（类似通义会话导航）
+ * - 贴 `[data-conversation-scroll]` 右边界，侧栏打开时自动内收
+ * - 开关以 settings / Config 为准；关闭时完全不渲染，避免显示疲劳
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
@@ -17,21 +17,17 @@ const FLOW_KEY = 'data-chat-flow-key'
 const FLOW_KIND = 'data-chat-flow-kind'
 const SCROLL_SEL = '[data-conversation-scroll]'
 const FULL_LOAD_PAGES = 120
-const PANEL_W = 300
-const TAB_W = 18
-const EDGE_GAP = 8
-const COLLAPSE_DELAY_MS = 220
+const PANEL_W = 280
+const HOT_W = 10
+const EDGE_GAP = 4
+const COLLAPSE_DELAY_MS = 280
 
 const zh = {
-  title: '会话 Query',
-  enable: '启用',
-  clear: '清空列表',
-  empty: '暂无用户提问',
+  title: '提问记录',
+  clear: '清空',
+  empty: '暂无提问',
   noSession: '请先打开会话',
-  loopback: '仅本机可用',
   jumpFail: '无法定位该消息',
-  closed: '已关闭',
-  tabHint: 'Query',
 }
 
 type DockGeo = { right: number; top: number; height: number }
@@ -46,8 +42,8 @@ function measureDock(): DockGeo | null {
   const rect = sc.getBoundingClientRect()
   if (rect.width < 80 || rect.height < 80) return null
   const right = Math.max(EDGE_GAP, Math.round(window.innerWidth - rect.right + EDGE_GAP))
-  const top = Math.max(56, Math.round(rect.top + 48))
-  const height = Math.max(160, Math.min(Math.round(rect.height - 64), Math.round(window.innerHeight * 0.72)))
+  const top = Math.max(48, Math.round(rect.top + 24))
+  const height = Math.max(180, Math.min(Math.round(rect.height - 40), Math.round(window.innerHeight * 0.78)))
   return { right, top, height }
 }
 
@@ -105,6 +101,17 @@ function findRowByMsgId(msgId: string): HTMLElement | null {
   return null
 }
 
+function formatTime(ts: number): string {
+  try {
+    const d = new Date(ts)
+    const hh = String(d.getHours()).padStart(2, '0')
+    const mm = String(d.getMinutes()).padStart(2, '0')
+    return `${hh}:${mm}`
+  } catch {
+    return ''
+  }
+}
+
 type Rpc = { call: (ch: string, endpoint: string, body?: unknown) => Promise<any> }
 
 type PanelProps = {
@@ -133,7 +140,6 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
 
   const hoverRef = useRef(false)
   const collapseTimer = useRef<number | null>(null)
-  const rootRef = useRef<HTMLDivElement | null>(null)
 
   const clearCollapseTimer = () => {
     if (collapseTimer.current != null) {
@@ -164,12 +170,7 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
     const next = measureDock()
     setGeo((prev) => {
       if (!next) return prev
-      if (
-        prev &&
-        prev.right === next.right &&
-        prev.top === next.top &&
-        prev.height === next.height
-      ) {
+      if (prev && prev.right === next.right && prev.top === next.top && prev.height === next.height) {
         return prev
       }
       return next
@@ -180,7 +181,6 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
     refreshGeo()
     const onResize = () => refreshGeo()
     window.addEventListener('resize', onResize)
-
     const sc = document.querySelector(SCROLL_SEL)
     let ro: ResizeObserver | null = null
     if (sc && typeof ResizeObserver !== 'undefined') {
@@ -188,9 +188,7 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
       ro.observe(sc)
       if (sc.parentElement) ro.observe(sc.parentElement)
     }
-
-    // 侧栏开合常改 layout，用轻量轮询兜底（比 MutationObserver 全树便宜）
-    const tick = window.setInterval(refreshGeo, 500)
+    const tick = window.setInterval(refreshGeo, 400)
     return () => {
       window.removeEventListener('resize', onResize)
       ro?.disconnect()
@@ -240,6 +238,8 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
 
   useEffect(() => {
     void refreshConfig()
+    const timer = window.setInterval(() => void refreshConfig(), 3000)
+    return () => window.clearInterval(timer)
   }, [refreshConfig])
 
   useEffect(() => {
@@ -263,15 +263,6 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
       seq: m.seq,
     }))
   }, [projected, mask, rpcMessages])
-
-  const onToggle = async (next: boolean) => {
-    try {
-      const res = await rpc.call(CHANNEL, 'setEnable', { enable: next })
-      if (res?.ok) setEnable(next)
-    } catch (err) {
-      console.warn('[dsh-query-jump] setEnable', err)
-    }
-  }
 
   const onClear = async () => {
     if (!sessionId) return
@@ -312,7 +303,7 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
       }
       row.scrollIntoView({ behavior: 'smooth', block: 'center' })
       const prev = row.style.outline
-      row.style.outline = '2px solid var(--dsw-alias-brand-primary, #2563eb)'
+      row.style.outline = '2px solid var(--dsw-alias-brand-primary, #615ced)'
       window.setTimeout(() => {
         row!.style.outline = prev
       }, 1200)
@@ -321,192 +312,175 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
     }
   }
 
-  const right = geo?.right ?? 16
-  const top = geo?.top ?? 80
-  const height = geo?.height ?? 360
+  // 开关关闭：完全不渲染，零存在感
+  if (!enable || !isLoopback) return null
+  if (!geo) return null
+  // 还没有任何提问时也不占位（避免空热区打扰）
+  if (items.length === 0 && !open) return null
 
-  // 无对话滚动区时不渲染，避免贴死视口右缘被侧栏盖住
-  if (!geo && !document.querySelector(SCROLL_SEL)) {
-    return null
-  }
-
-  if (!isLoopback) {
-    return (
-      <div
-        ref={rootRef}
-        style={{ ...shellStyle, right, top, width: open ? PANEL_W : TAB_W, height: open ? 80 : 120 }}
-        onPointerEnter={onEnter}
-        onPointerLeave={onLeave}
-      >
-        {open ? <div style={tipStyle}>{t('loopback')}</div> : <TabLabel text={t('tabHint')} />}
-      </div>
-    )
-  }
-
-  if (!enable) {
-    return (
-      <div
-        ref={rootRef}
-        style={{ ...shellStyle, right, top, width: open ? 200 : TAB_W, height: open ? 56 : 100 }}
-        onPointerEnter={onEnter}
-        onPointerLeave={onLeave}
-      >
-        {open ? (
-          <label style={{ ...headerStyle, borderBottom: 'none', gap: 8 }}>
-            <input type="checkbox" checked={false} onChange={() => void onToggle(true)} />
-            {t('closed')}
-          </label>
-        ) : (
-          <TabLabel text="Off" />
-        )}
-      </div>
-    )
-  }
+  const { right, top, height } = geo
 
   return (
     <div
-      ref={rootRef}
       style={{
-        ...shellStyle,
+        position: 'fixed',
+        zIndex: 45,
         right,
         top,
-        width: open ? PANEL_W : TAB_W,
-        height: open ? height : Math.min(160, height),
-        transition: 'width .18s ease, height .18s ease, box-shadow .18s ease',
+        width: open ? PANEL_W : HOT_W,
+        height: open ? height : Math.min(220, height),
+        display: 'flex',
+        justifyContent: 'flex-end',
+        pointerEvents: 'auto',
+        transition: 'width .2s ease',
       }}
       onPointerEnter={onEnter}
       onPointerLeave={onLeave}
     >
-      {!open ? (
-        <TabLabel text={t('tabHint')} count={items.length} />
-      ) : (
-        <>
-          <div style={headerStyle}>
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 }}>
-              <input
-                type="checkbox"
-                checked={enable}
-                onChange={(e) => void onToggle(e.target.checked)}
-              />
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {t('title')}
-              </span>
-            </label>
-            <button type="button" style={btnStyle} onClick={() => void onClear()}>
+      {/* 收起：几乎透明的热区，仅悬停可感知 */}
+      {!open && (
+        <div
+          style={{
+            width: HOT_W,
+            height: '100%',
+            borderRadius: 6,
+            background: 'transparent',
+            cursor: 'ew-resize',
+          }}
+          title={t('title')}
+        />
+      )}
+
+      {/* 展开：通义风滑出卡片 */}
+      {open && (
+        <div
+          style={{
+            width: PANEL_W,
+            height: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            background: 'var(--dsw-alias-bg-layer-3, rgba(255,255,255,.96))',
+            border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.06))',
+            borderRadius: 12,
+            boxShadow: '0 10px 40px rgba(15,23,42,.12)',
+            color: 'var(--dsw-alias-label-primary, #1f2329)',
+            backdropFilter: 'blur(8px)',
+            overflow: 'hidden',
+            animation: 'qjSlideIn .18s ease-out',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '12px 14px 8px',
+              flexShrink: 0,
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 600 }}>{t('title')}</div>
+            <button
+              type="button"
+              onClick={() => void onClear()}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--dsw-alias-label-secondary, #8a8f98)',
+                fontSize: 12,
+                cursor: 'pointer',
+                padding: '2px 4px',
+              }}
+            >
               {t('clear')}
             </button>
           </div>
-          <div style={{ overflow: 'auto', flex: 1, minHeight: 0 }}>
-            {!sessionId && <div style={tipStyle}>{t('noSession')}</div>}
-            {sessionId && items.length === 0 && <div style={tipStyle}>{t('empty')}</div>}
-            {items.map((item) => (
-              <div
+
+          <div style={{ overflow: 'auto', flex: 1, padding: '0 8px 10px' }}>
+            {!sessionId && <div style={emptyStyle}>{t('noSession')}</div>}
+            {sessionId && items.length === 0 && <div style={emptyStyle}>{t('empty')}</div>}
+            {items.map((item, idx) => (
+              <button
                 key={item.msgId}
-                role="button"
-                tabIndex={0}
+                type="button"
                 title={item.query}
-                style={rowStyle}
                 onClick={() => void onJump(item.msgId)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void onJump(item.msgId)
-                }}
+                style={itemStyle}
               >
-                {item.query.length > 60 ? `${item.query.slice(0, 60)}…` : item.query}
-              </div>
+                <span style={idxStyle}>{idx + 1}</span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span
+                    style={{
+                      display: 'block',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      fontSize: 13,
+                      lineHeight: 1.4,
+                      textAlign: 'left',
+                    }}
+                  >
+                    {item.query}
+                  </span>
+                  <span
+                    style={{
+                      display: 'block',
+                      marginTop: 2,
+                      fontSize: 11,
+                      color: 'var(--dsw-alias-label-secondary, #8a8f98)',
+                      textAlign: 'left',
+                    }}
+                  >
+                    {formatTime(item.createAt)}
+                  </span>
+                </span>
+              </button>
             ))}
           </div>
-        </>
+        </div>
       )}
+
+      <style>{`
+        @keyframes qjSlideIn {
+          from { opacity: 0; transform: translateX(12px); }
+          to { opacity: 1; transform: translateX(0); }
+        }
+      `}</style>
     </div>
   )
 }
 
-function TabLabel({ text, count }: { text: string; count?: number }) {
-  return (
-    <div style={tabInnerStyle} title={text}>
-      <span style={tabTextStyle}>{text}</span>
-      {typeof count === 'number' && count > 0 ? <span style={badgeStyle}>{count > 99 ? '99+' : count}</span> : null}
-    </div>
-  )
-}
-
-const shellStyle: React.CSSProperties = {
-  position: 'fixed',
-  zIndex: 45,
-  display: 'flex',
-  flexDirection: 'column',
-  overflow: 'hidden',
-  background: 'var(--dsw-alias-bg-layer-3, #fff)',
-  border: '1px solid var(--dsw-alias-border-l2, #e5e7eb)',
-  borderRadius: 10,
-  color: 'var(--dsw-alias-label-primary, #111)',
-  boxShadow: '0 8px 24px rgba(0,0,0,.14)',
-  pointerEvents: 'auto',
-}
-
-const tabInnerStyle: React.CSSProperties = {
-  flex: 1,
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 8,
-  padding: '10px 2px',
-  cursor: 'pointer',
-  userSelect: 'none',
-}
-
-const tabTextStyle: React.CSSProperties = {
-  writingMode: 'vertical-rl',
-  textOrientation: 'mixed',
-  fontSize: 11,
-  letterSpacing: '0.08em',
-  color: 'var(--dsw-alias-label-secondary, #666)',
-}
-
-const badgeStyle: React.CSSProperties = {
-  minWidth: 16,
-  height: 16,
-  padding: '0 4px',
-  borderRadius: 8,
-  fontSize: 10,
-  lineHeight: '16px',
+const emptyStyle: React.CSSProperties = {
+  color: 'var(--dsw-alias-label-secondary, #8a8f98)',
+  fontSize: 12,
+  padding: '16px 8px',
   textAlign: 'center',
-  background: 'var(--dsw-alias-brand-primary, #2563eb)',
-  color: '#fff',
 }
 
-const headerStyle: React.CSSProperties = {
+const itemStyle: React.CSSProperties = {
+  width: '100%',
   display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  padding: '8px 10px',
-  borderBottom: '1px solid var(--dsw-alias-border-l2, #e5e7eb)',
-  fontSize: 12,
-  flexShrink: 0,
-}
-
-const tipStyle: React.CSSProperties = {
-  color: 'var(--dsw-alias-label-secondary, #888)',
-  fontSize: 12,
-  padding: 8,
-}
-
-const btnStyle: React.CSSProperties = {
-  fontSize: 11,
-  flexShrink: 0,
-}
-
-const rowStyle: React.CSSProperties = {
-  padding: '6px 8px',
-  margin: '4px 8px',
-  borderRadius: 6,
-  background: 'var(--dsw-alias-bg-layer-2, #f5f7fa)',
+  alignItems: 'flex-start',
+  gap: 10,
+  padding: '10px 8px',
+  marginBottom: 2,
+  border: 'none',
+  borderRadius: 8,
+  background: 'transparent',
   cursor: 'pointer',
-  fontSize: 12,
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
+  color: 'inherit',
+}
+
+const idxStyle: React.CSSProperties = {
+  flexShrink: 0,
+  width: 18,
+  height: 18,
+  marginTop: 1,
+  borderRadius: 9,
+  fontSize: 11,
+  lineHeight: '18px',
+  textAlign: 'center',
+  color: 'var(--dsw-alias-label-secondary, #8a8f98)',
+  background: 'var(--dsw-alias-bg-layer-2, rgba(0,0,0,.04))',
 }
 
 export function apply(ctx: any) {
@@ -522,7 +496,7 @@ export function apply(ctx: any) {
   try {
     t = ctx.locale.bind(NS)
   } catch {
-    /* keep fallback t */
+    /* fallback */
   }
 
   ctx.slots.inject('shell.overlay', () =>
