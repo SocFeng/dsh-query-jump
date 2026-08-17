@@ -174,7 +174,7 @@ dsh --profile web --dump-config
 | 点击较早历史 | 必要时先 `loadOlder` 再跳转 |
 | 「清空」 | 仅屏蔽本插件列表（mask），不删聊天 |
 | 切换会话 | 自动换列表；磁盘缓存按会话隔离 |
-| `enable: false` | 右侧留一个 🤗 入口，点击可重新开启 |
+| `enable: false` | 不渲染右侧导航；设置页可再开 |
 
 ---
 
