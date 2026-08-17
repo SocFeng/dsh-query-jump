@@ -2,13 +2,11 @@
  * dsh-query-jump — browser half
  *
  * 通义风短横线导航：
- * - 平时：对话区右缘淡色 tick rail（有存在感但不抢眼）
- * - 当前阅读位置：更深色 tick + 列表高亮
- * - 悬停 rail / 面板：弹出「提问记录」+ 模糊搜索
- * - 列表约 20 条可视高度，可滚动；贴 conversation-scroll 边界
+ * - 对话区右缘淡色 tick rail（无弹出 dialog）
+ * - 当前阅读位置：更深色 tick
+ * - 悬停 tick 看提问摘要，点击跳转；贴 conversation-scroll 边界
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { fuzzyMatch } from './text.js'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
 export const inject = ['slots', 'connection', 'locale']
 
@@ -24,20 +22,9 @@ const RAIL_W = 22
 const TICK_GAP = 8
 const TICK_H = 2
 const EDGE_GAP = 6
-const PANEL_W = 300
-const ROW_H = 34
-const VISIBLE_ROWS = 20
-const LIST_H = ROW_H * VISIBLE_ROWS
-const COLLAPSE_MS = 260
 const READ_LINE = 0.38
 
 const zh = {
-  title: '提问记录',
-  search: '搜索提问…',
-  clear: '清空',
-  empty: '暂无提问',
-  noMatch: '无匹配结果',
-  noSession: '请先打开会话',
   jumpFail: '无法定位该消息',
 }
 
@@ -112,15 +99,6 @@ async function loadUntilIdLoaded(face: any, id: string) {
   }
 }
 
-function formatTime(ts: number): string {
-  try {
-    const d = new Date(ts)
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  } catch {
-    return ''
-  }
-}
-
 type Rpc = { call: (ch: string, endpoint: string, body?: unknown) => Promise<any> }
 
 function QueryJumpPanel({
@@ -149,16 +127,9 @@ function QueryJumpPanel({
     Array<{ seq: number; time: number; text: string; id?: string }>
   >([])
   const [geo, setGeo] = useState<DockGeo | null>(null)
-  const [open, setOpen] = useState(false)
-  const [query, setQuery] = useState('')
   const [activeIdx, setActiveIdx] = useState(-1)
   const [busy, setBusy] = useState(false)
   const [railScroll, setRailScroll] = useState(0)
-
-  const hoverRef = useRef(false)
-  const collapseTimer = useRef<number | null>(null)
-  const listRef = useRef<HTMLDivElement | null>(null)
-  const searchRef = useRef<HTMLInputElement | null>(null)
 
   const items = useMemo(() => {
     const fromProj = (projected?.messages ?? []).filter((m) => m.id && !mask.has(String(m.id)))
@@ -172,36 +143,6 @@ function QueryJumpPanel({
       }),
     )
   }, [projected, mask, rpcMessages])
-
-  const filtered = useMemo(() => {
-    if (!query.trim()) return items
-    return items.filter((it) => fuzzyMatch(it.query, query))
-  }, [items, query])
-
-  const clearCollapse = () => {
-    if (collapseTimer.current != null) {
-      window.clearTimeout(collapseTimer.current)
-      collapseTimer.current = null
-    }
-  }
-
-  const onEnter = () => {
-    hoverRef.current = true
-    clearCollapse()
-    setOpen(true)
-    window.setTimeout(() => searchRef.current?.focus(), 40)
-  }
-
-  const onLeave = () => {
-    hoverRef.current = false
-    clearCollapse()
-    collapseTimer.current = window.setTimeout(() => {
-      if (!hoverRef.current) {
-        setOpen(false)
-        setQuery('')
-      }
-    }, COLLAPSE_MS)
-  }
 
   const refreshGeo = useCallback(() => {
     const next = measureDock()
@@ -267,16 +208,22 @@ function QueryJumpPanel({
       window.removeEventListener('resize', onResize)
       ro?.disconnect()
       window.clearInterval(tick)
-      clearCollapse()
     }
   }, [refreshGeo, spyActive])
 
-  // 打开面板时把当前项滚进列表可视区
+  // 当前项滚进 rail 可视区
   useEffect(() => {
-    if (!open || activeIdx < 0 || !listRef.current) return
-    const el = listRef.current.querySelector(`[data-qj-idx="${activeIdx}"]`) as HTMLElement | null
-    el?.scrollIntoView({ block: 'nearest' })
-  }, [open, activeIdx])
+    if (!geo || activeIdx < 0) return
+    const { railH } = geo
+    const tickY = 4 + activeIdx * TICK_GAP
+    setRailScroll((prev) => {
+      const contentH = Math.max(railH, (items.length - 1) * TICK_GAP + TICK_H + 8)
+      const max = Math.max(0, contentH - railH)
+      if (tickY < prev) return Math.min(max, tickY)
+      if (tickY + TICK_H > prev + railH) return Math.min(max, Math.max(0, tickY + TICK_H - railH))
+      return Math.min(max, prev)
+    })
+  }, [activeIdx, geo, items.length])
 
   const refreshConfig = useCallback(async () => {
     if (!isLoopback) return
@@ -333,13 +280,6 @@ function QueryJumpPanel({
     const tmr = window.setInterval(() => void refreshList(), 1500)
     return () => window.clearInterval(tmr)
   }, [refreshList, sessionId, isLoopback])
-
-  const onClear = async () => {
-    if (!sessionId) return
-    await rpc.call(CHANNEL, 'clearMask', { sessionId, msgIds: items.map((i) => i.msgId) })
-    await refreshMask()
-    await refreshList()
-  }
 
   const onJump = async (msgId: string, idxInAll?: number) => {
     if (busy || !sessionId) return
@@ -401,16 +341,10 @@ function QueryJumpPanel({
         right,
         top,
         height: railH,
-        display: 'flex',
-        flexDirection: 'row-reverse',
-        alignItems: 'stretch',
-        gap: 8,
+        width: RAIL_W,
         pointerEvents: 'auto',
       }}
-      onPointerEnter={onEnter}
-      onPointerLeave={onLeave}
     >
-      {/* tick rail */}
       <div
         style={{
           width: RAIL_W,
@@ -438,7 +372,7 @@ function QueryJumpPanel({
               <button
                 key={it.msgId}
                 type="button"
-                title={it.query.slice(0, 80)}
+                title={it.query.slice(0, 120)}
                 onClick={() => void onJump(it.msgId, idx)}
                 style={{
                   position: 'absolute',
@@ -461,181 +395,8 @@ function QueryJumpPanel({
           })}
         </div>
       </div>
-
-      {/* 弹出列表 */}
-      {open && (
-        <div
-          style={{
-            width: PANEL_W,
-            height: Math.min(railH, 56 + LIST_H),
-            display: 'flex',
-            flexDirection: 'column',
-            background: 'var(--dsw-alias-bg-layer-3, #fff)',
-            border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08))',
-            borderRadius: 12,
-            boxShadow: '0 12px 36px rgba(15,23,42,.14)',
-            overflow: 'hidden',
-            animation: 'qjIn .16s ease-out',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '10px 10px 8px',
-              borderBottom: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.06))',
-            }}
-          >
-            <div style={{ fontSize: 13, fontWeight: 600, flexShrink: 0 }}>{t('title')}</div>
-            <input
-              ref={searchRef}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t('search')}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                height: 28,
-                borderRadius: 8,
-                border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))',
-                padding: '0 10px',
-                fontSize: 12,
-                outline: 'none',
-                background: 'var(--dsw-alias-bg-layer-2, #f5f6f8)',
-                color: 'inherit',
-              }}
-            />
-            <button
-              type="button"
-              onClick={() => void onClear()}
-              style={{
-                border: 'none',
-                background: 'transparent',
-                color: 'var(--dsw-alias-label-secondary, #8a8f98)',
-                fontSize: 12,
-                cursor: 'pointer',
-                flexShrink: 0,
-              }}
-            >
-              {t('clear')}
-            </button>
-          </div>
-
-          <div
-            ref={listRef}
-            style={{
-              flex: 1,
-              overflow: 'auto',
-              maxHeight: LIST_H,
-              padding: '4px 6px 8px',
-            }}
-          >
-            {!sessionId && <div style={emptyStyle}>{t('noSession')}</div>}
-            {sessionId && filtered.length === 0 && (
-              <div style={emptyStyle}>{items.length === 0 ? t('empty') : t('noMatch')}</div>
-            )}
-            {filtered.map((item) => {
-              const idxAll = items.findIndex((x) => x.msgId === item.msgId)
-              const active = idxAll === activeIdx
-              return (
-                <button
-                  key={item.msgId}
-                  type="button"
-                  data-qj-idx={idxAll}
-                  title={item.query}
-                  onClick={() => void onJump(item.msgId, idxAll)}
-                  style={{
-                    ...rowStyle,
-                    background: active
-                      ? 'var(--dsw-alias-interactive-bg-hover, rgba(97,92,237,.1))'
-                      : 'transparent',
-                    boxShadow: active
-                      ? 'inset 2px 0 0 var(--dsw-alias-brand-primary, #615ced)'
-                      : 'none',
-                  }}
-                >
-                  <span
-                    style={{
-                      ...idxStyle,
-                      background: active
-                        ? 'var(--dsw-alias-brand-primary, #615ced)'
-                        : 'var(--dsw-alias-bg-layer-2, rgba(0,0,0,.05))',
-                      color: active ? '#fff' : 'var(--dsw-alias-label-secondary, #8a8f98)',
-                    }}
-                  >
-                    {idxAll + 1}
-                  </span>
-                  <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
-                    <span
-                      style={{
-                        display: 'block',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        fontSize: 12.5,
-                        lineHeight: 1.35,
-                        fontWeight: active ? 600 : 400,
-                      }}
-                    >
-                      {item.query}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: 11,
-                        color: 'var(--dsw-alias-label-secondary, #8a8f98)',
-                      }}
-                    >
-                      {formatTime(item.createAt)}
-                    </span>
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      <style>{`
-        @keyframes qjIn {
-          from { opacity: 0; transform: translateX(10px); }
-          to { opacity: 1; transform: translateX(0); }
-        }
-      `}</style>
     </div>
   )
-}
-
-const emptyStyle: React.CSSProperties = {
-  color: 'var(--dsw-alias-label-secondary, #8a8f98)',
-  fontSize: 12,
-  padding: '20px 8px',
-  textAlign: 'center',
-}
-
-const rowStyle: React.CSSProperties = {
-  width: '100%',
-  display: 'flex',
-  alignItems: 'flex-start',
-  gap: 8,
-  minHeight: ROW_H,
-  padding: '6px 8px',
-  marginBottom: 1,
-  border: 'none',
-  borderRadius: 8,
-  cursor: 'pointer',
-  color: 'inherit',
-}
-
-const idxStyle: React.CSSProperties = {
-  flexShrink: 0,
-  width: 18,
-  height: 18,
-  marginTop: 1,
-  borderRadius: 9,
-  fontSize: 10,
-  lineHeight: '18px',
-  textAlign: 'center',
 }
 
 export function apply(ctx: any) {
