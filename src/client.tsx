@@ -275,11 +275,10 @@ function QueryJumpPanel({
   }
 
   const onLeave = () => {
-    if (Date.now() < pinUntilRef.current) return
     hoverRef.current = false
     clearCollapse()
     collapseTimer.current = window.setTimeout(() => {
-      if (!hoverRef.current && Date.now() >= pinUntilRef.current) setOpen(false)
+      if (!hoverRef.current) setOpen(false)
     }, COLLAPSE_MS)
   }
 
