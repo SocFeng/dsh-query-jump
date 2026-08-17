@@ -1,9 +1,12 @@
 /**
  * dsh-query-jump — browser half.
- * Registers a right-docked shell.overlay panel: query list, enable toggle,
- * clear-mask, jump via data-chat-flow-key (+ loadOlder when needed).
+ *
+ * UX:
+ * - 默认收起：贴在对话区右缘的窄条（不常驻大面板）
+ * - 鼠标悬停窄条 / 面板时展开完整列表
+ * - 位置跟随 `[data-conversation-scroll]` 右边界，侧栏（Explorer 等）打开时自动内收，不被遮挡
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 export const inject = ['slots', 'connection', 'locale']
 
@@ -12,21 +15,40 @@ const CHANNEL = '/query-jump'
 const PROJECTION_KEY = 'queryJumpMessages'
 const FLOW_KEY = 'data-chat-flow-key'
 const FLOW_KIND = 'data-chat-flow-kind'
+const SCROLL_SEL = '[data-conversation-scroll]'
 const FULL_LOAD_PAGES = 120
+const PANEL_W = 300
+const TAB_W = 18
+const EDGE_GAP = 8
+const COLLAPSE_DELAY_MS = 220
 
 const zh = {
-  title: '会话 Query 定位',
+  title: '会话 Query',
   enable: '启用',
-  clear: '清空本会话列表',
+  clear: '清空列表',
   empty: '暂无用户提问',
   noSession: '请先打开会话',
-  loopback: '仅本机 127.0.0.1 可用',
-  jumpFail: '无法定位该消息（可能仍在加载历史）',
-  closed: '已关闭 — 勾选以重新启用',
+  loopback: '仅本机可用',
+  jumpFail: '无法定位该消息',
+  closed: '已关闭',
+  tabHint: 'Query',
 }
+
+type DockGeo = { right: number; top: number; height: number }
 
 function delay(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms))
+}
+
+function measureDock(): DockGeo | null {
+  const sc = document.querySelector(SCROLL_SEL) as HTMLElement | null
+  if (!sc) return null
+  const rect = sc.getBoundingClientRect()
+  if (rect.width < 80 || rect.height < 80) return null
+  const right = Math.max(EDGE_GAP, Math.round(window.innerWidth - rect.right + EDGE_GAP))
+  const top = Math.max(56, Math.round(rect.top + 48))
+  const height = Math.max(160, Math.min(Math.round(rect.height - 64), Math.round(window.innerHeight * 0.72)))
+  return { right, top, height }
 }
 
 function windowHasId(snap: any, id: string): boolean {
@@ -103,9 +125,79 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
   const [enable, setEnable] = useState(true)
   const [mask, setMask] = useState<Set<string>>(() => new Set())
   const [busy, setBusy] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [geo, setGeo] = useState<DockGeo | null>(null)
   const [rpcMessages, setRpcMessages] = useState<
     Array<{ seq: number; time: number; text: string; id?: string }>
   >([])
+
+  const hoverRef = useRef(false)
+  const collapseTimer = useRef<number | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+
+  const clearCollapseTimer = () => {
+    if (collapseTimer.current != null) {
+      window.clearTimeout(collapseTimer.current)
+      collapseTimer.current = null
+    }
+  }
+
+  const scheduleCollapse = () => {
+    clearCollapseTimer()
+    collapseTimer.current = window.setTimeout(() => {
+      if (!hoverRef.current) setOpen(false)
+    }, COLLAPSE_DELAY_MS)
+  }
+
+  const onEnter = () => {
+    hoverRef.current = true
+    clearCollapseTimer()
+    setOpen(true)
+  }
+
+  const onLeave = () => {
+    hoverRef.current = false
+    scheduleCollapse()
+  }
+
+  const refreshGeo = useCallback(() => {
+    const next = measureDock()
+    setGeo((prev) => {
+      if (!next) return prev
+      if (
+        prev &&
+        prev.right === next.right &&
+        prev.top === next.top &&
+        prev.height === next.height
+      ) {
+        return prev
+      }
+      return next
+    })
+  }, [])
+
+  useEffect(() => {
+    refreshGeo()
+    const onResize = () => refreshGeo()
+    window.addEventListener('resize', onResize)
+
+    const sc = document.querySelector(SCROLL_SEL)
+    let ro: ResizeObserver | null = null
+    if (sc && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => refreshGeo())
+      ro.observe(sc)
+      if (sc.parentElement) ro.observe(sc.parentElement)
+    }
+
+    // 侧栏开合常改 layout，用轻量轮询兜底（比 MutationObserver 全树便宜）
+    const tick = window.setInterval(refreshGeo, 500)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      ro?.disconnect()
+      window.clearInterval(tick)
+      clearCollapseTimer()
+    }
+  }, [refreshGeo])
 
   const refreshConfig = useCallback(async () => {
     if (!isLoopback) return
@@ -229,89 +321,159 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
     }
   }
 
-  if (!isLoopback) {
-    return React.createElement('div', { style: panelStyle }, t('loopback'))
+  const right = geo?.right ?? 16
+  const top = geo?.top ?? 80
+  const height = geo?.height ?? 360
+
+  // 无对话滚动区时不渲染，避免贴死视口右缘被侧栏盖住
+  if (!geo && !document.querySelector(SCROLL_SEL)) {
+    return null
   }
 
-  if (!enable) {
-    return React.createElement(
-      'div',
-      { style: { ...panelStyle, maxHeight: 52 } },
-      React.createElement(
-        'label',
-        { style: { ...headerStyle, gap: 8 } },
-        React.createElement('input', {
-          type: 'checkbox',
-          checked: false,
-          onChange: () => void onToggle(true),
-        }),
-        t('closed'),
-      ),
+  if (!isLoopback) {
+    return (
+      <div
+        ref={rootRef}
+        style={{ ...shellStyle, right, top, width: open ? PANEL_W : TAB_W, height: open ? 80 : 120 }}
+        onPointerEnter={onEnter}
+        onPointerLeave={onLeave}
+      >
+        {open ? <div style={tipStyle}>{t('loopback')}</div> : <TabLabel text={t('tabHint')} />}
+      </div>
     )
   }
 
-  return React.createElement(
-    'div',
-    { style: panelStyle },
-    React.createElement(
-      'div',
-      { style: headerStyle },
-      React.createElement(
-        'label',
-        { style: { display: 'flex', gap: 6, alignItems: 'center' } },
-        React.createElement('input', {
-          type: 'checkbox',
-          checked: enable,
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => void onToggle(e.target.checked),
-        }),
-        t('title'),
-      ),
-      React.createElement(
-        'button',
-        { type: 'button', style: { fontSize: 11 }, onClick: () => void onClear() },
-        t('clear'),
-      ),
-    ),
-    React.createElement(
-      'div',
-      { style: { overflow: 'auto', flex: 1 } },
-      !sessionId && React.createElement('div', { style: tipStyle }, t('noSession')),
-      sessionId && items.length === 0 && React.createElement('div', { style: tipStyle }, t('empty')),
-      items.map((item) =>
-        React.createElement(
-          'div',
-          {
-            key: item.msgId,
-            role: 'button',
-            tabIndex: 0,
-            title: item.query,
-            style: rowStyle,
-            onClick: () => void onJump(item.msgId),
-            onKeyDown: (e: React.KeyboardEvent) => {
-              if (e.key === 'Enter') void onJump(item.msgId)
-            },
-          },
-          item.query.length > 60 ? `${item.query.slice(0, 60)}…` : item.query,
-        ),
-      ),
-    ),
+  if (!enable) {
+    return (
+      <div
+        ref={rootRef}
+        style={{ ...shellStyle, right, top, width: open ? 200 : TAB_W, height: open ? 56 : 100 }}
+        onPointerEnter={onEnter}
+        onPointerLeave={onLeave}
+      >
+        {open ? (
+          <label style={{ ...headerStyle, borderBottom: 'none', gap: 8 }}>
+            <input type="checkbox" checked={false} onChange={() => void onToggle(true)} />
+            {t('closed')}
+          </label>
+        ) : (
+          <TabLabel text="Off" />
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div
+      ref={rootRef}
+      style={{
+        ...shellStyle,
+        right,
+        top,
+        width: open ? PANEL_W : TAB_W,
+        height: open ? height : Math.min(160, height),
+        transition: 'width .18s ease, height .18s ease, box-shadow .18s ease',
+      }}
+      onPointerEnter={onEnter}
+      onPointerLeave={onLeave}
+    >
+      {!open ? (
+        <TabLabel text={t('tabHint')} count={items.length} />
+      ) : (
+        <>
+          <div style={headerStyle}>
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 }}>
+              <input
+                type="checkbox"
+                checked={enable}
+                onChange={(e) => void onToggle(e.target.checked)}
+              />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {t('title')}
+              </span>
+            </label>
+            <button type="button" style={btnStyle} onClick={() => void onClear()}>
+              {t('clear')}
+            </button>
+          </div>
+          <div style={{ overflow: 'auto', flex: 1, minHeight: 0 }}>
+            {!sessionId && <div style={tipStyle}>{t('noSession')}</div>}
+            {sessionId && items.length === 0 && <div style={tipStyle}>{t('empty')}</div>}
+            {items.map((item) => (
+              <div
+                key={item.msgId}
+                role="button"
+                tabIndex={0}
+                title={item.query}
+                style={rowStyle}
+                onClick={() => void onJump(item.msgId)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void onJump(item.msgId)
+                }}
+              >
+                {item.query.length > 60 ? `${item.query.slice(0, 60)}…` : item.query}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 
-const panelStyle: React.CSSProperties = {
+function TabLabel({ text, count }: { text: string; count?: number }) {
+  return (
+    <div style={tabInnerStyle} title={text}>
+      <span style={tabTextStyle}>{text}</span>
+      {typeof count === 'number' && count > 0 ? <span style={badgeStyle}>{count > 99 ? '99+' : count}</span> : null}
+    </div>
+  )
+}
+
+const shellStyle: React.CSSProperties = {
   position: 'fixed',
-  right: 16,
-  top: 80,
-  width: 320,
-  maxHeight: '70vh',
-  zIndex: 40,
+  zIndex: 45,
   display: 'flex',
   flexDirection: 'column',
+  overflow: 'hidden',
   background: 'var(--dsw-alias-bg-layer-3, #fff)',
   border: '1px solid var(--dsw-alias-border-l2, #e5e7eb)',
-  borderRadius: 12,
+  borderRadius: 10,
   color: 'var(--dsw-alias-label-primary, #111)',
-  boxShadow: '0 8px 24px rgba(0,0,0,.12)',
+  boxShadow: '0 8px 24px rgba(0,0,0,.14)',
+  pointerEvents: 'auto',
+}
+
+const tabInnerStyle: React.CSSProperties = {
+  flex: 1,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  padding: '10px 2px',
+  cursor: 'pointer',
+  userSelect: 'none',
+}
+
+const tabTextStyle: React.CSSProperties = {
+  writingMode: 'vertical-rl',
+  textOrientation: 'mixed',
+  fontSize: 11,
+  letterSpacing: '0.08em',
+  color: 'var(--dsw-alias-label-secondary, #666)',
+}
+
+const badgeStyle: React.CSSProperties = {
+  minWidth: 16,
+  height: 16,
+  padding: '0 4px',
+  borderRadius: 8,
+  fontSize: 10,
+  lineHeight: '16px',
+  textAlign: 'center',
+  background: 'var(--dsw-alias-brand-primary, #2563eb)',
+  color: '#fff',
 }
 
 const headerStyle: React.CSSProperties = {
@@ -321,12 +483,18 @@ const headerStyle: React.CSSProperties = {
   padding: '8px 10px',
   borderBottom: '1px solid var(--dsw-alias-border-l2, #e5e7eb)',
   fontSize: 12,
+  flexShrink: 0,
 }
 
 const tipStyle: React.CSSProperties = {
   color: 'var(--dsw-alias-label-secondary, #888)',
   fontSize: 12,
   padding: 8,
+}
+
+const btnStyle: React.CSSProperties = {
+  fontSize: 11,
+  flexShrink: 0,
 }
 
 const rowStyle: React.CSSProperties = {
