@@ -37,8 +37,13 @@ const zh = {
   empty: '暂无提问',
   noSession: '请先打开会话',
   jumpFail: '无法定位该消息',
+  enable: '启用',
+  markerEmoji: '🤗',
+  markerNumber: '序号',
+  disabledHint: '已关闭，点击开启',
 }
 
+type MarkerStyle = 'emoji' | 'number'
 type Item = { msgId: string; query: string; createAt: number; seq: number }
 type DockGeo = { right: number; top: number; railH: number }
 
@@ -210,6 +215,7 @@ function QueryJumpPanel({
     | undefined
 
   const [enable, setEnable] = useState(true)
+  const [markerStyle, setMarkerStyle] = useState<MarkerStyle>('emoji')
   const [mask, setMask] = useState<Set<string>>(() => new Set())
   const [rpcMessages, setRpcMessages] = useState<
     Array<{ seq: number; time: number; text: string; id?: string }>
@@ -342,11 +348,34 @@ function QueryJumpPanel({
     if (!isLoopback) return
     try {
       const res = await rpc.call(CHANNEL, 'getConfig', {})
-      if (res?.ok) setEnable(!!res.value.enable)
+      if (res?.ok) {
+        setEnable(!!res.value.enable)
+        if (res.value.markerStyle === 'number' || res.value.markerStyle === 'emoji') {
+          setMarkerStyle(res.value.markerStyle)
+        }
+      }
     } catch {
       /* ignore */
     }
   }, [rpc, isLoopback])
+
+  const patchConfig = useCallback(
+    async (patch: { enable?: boolean; markerStyle?: MarkerStyle }) => {
+      if (!isLoopback) return
+      try {
+        const res = await rpc.call(CHANNEL, 'setConfig', patch)
+        if (res?.ok) {
+          if (typeof res.value.enable === 'boolean') setEnable(res.value.enable)
+          if (res.value.markerStyle === 'number' || res.value.markerStyle === 'emoji') {
+            setMarkerStyle(res.value.markerStyle)
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    },
+    [rpc, isLoopback],
+  )
 
   const refreshMask = useCallback(async () => {
     if (!isLoopback || !sessionId) {
@@ -370,6 +399,9 @@ function QueryJumpPanel({
       const res = await rpc.call(CHANNEL, 'list', { sessionId })
       if (res?.ok) {
         if (typeof res.value.enable === 'boolean') setEnable(res.value.enable)
+        if (res.value.markerStyle === 'number' || res.value.markerStyle === 'emoji') {
+          setMarkerStyle(res.value.markerStyle)
+        }
         setRpcMessages(res.value.messages ?? [])
       }
     } catch {
@@ -433,7 +465,39 @@ function QueryJumpPanel({
     }
   }
 
-  if (!enable || !isLoopback || !geo || items.length === 0) return null
+  if (!isLoopback || !geo) return null
+
+  // 关闭时仍露出入口，方便从面板重新开启
+  if (!enable) {
+    return (
+      <button
+        type="button"
+        title={t('disabledHint')}
+        onClick={() => void patchConfig({ enable: true })}
+        style={{
+          position: 'fixed',
+          zIndex: 45,
+          right: geo.right,
+          top: geo.top + Math.max(0, geo.railH / 2 - 14),
+          width: 28,
+          height: 28,
+          borderRadius: 8,
+          border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))',
+          background: 'var(--dsw-alias-bg-layer-3, #fff)',
+          boxShadow: '0 4px 12px rgba(15,23,42,.1)',
+          cursor: 'pointer',
+          fontSize: 14,
+          lineHeight: '26px',
+          padding: 0,
+          opacity: 0.85,
+        }}
+      >
+        {EMOJI}
+      </button>
+    )
+  }
+
+  if (items.length === 0) return null
 
   const { right, top, railH } = geo
   const contentH = Math.max(railH, (items.length - 1) * TICK_GAP + TICK_H + 8)
@@ -445,6 +509,36 @@ function QueryJumpPanel({
     e.preventDefault()
     e.stopPropagation()
     setRailScroll((v) => Math.min(maxRailScroll, Math.max(0, v + e.deltaY)))
+  }
+
+  const markerOf = (idx: number, active: boolean) => {
+    if (markerStyle === 'number') {
+      return (
+        <span
+          style={{
+            ...numStyle,
+            background: active
+              ? 'var(--dsw-alias-label-primary, #3d3d3d)'
+              : 'var(--dsw-alias-bg-layer-2, rgba(0,0,0,.05))',
+            color: active ? '#fff' : 'var(--dsw-alias-label-secondary, #8a8f98)',
+          }}
+        >
+          {idx + 1}
+        </span>
+      )
+    }
+    return (
+      <span
+        aria-hidden
+        style={{
+          ...emojiStyle,
+          opacity: active ? 1 : 0.55,
+          transform: active ? 'scale(1.08)' : 'scale(1)',
+        }}
+      >
+        {EMOJI}
+      </span>
+    )
   }
 
   return (
@@ -517,79 +611,122 @@ function QueryJumpPanel({
 
       {open && (
         <div
-          ref={listRef}
           style={{
             width: PANEL_W,
-            maxHeight: Math.min(railH, LIST_H),
-            overflow: 'auto',
-            padding: '6px 4px',
+            maxHeight: Math.min(railH, LIST_H + 40),
+            display: 'flex',
+            flexDirection: 'column',
             background: 'var(--dsw-alias-bg-layer-3, #fff)',
             border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08))',
             borderRadius: 10,
             boxShadow: '0 8px 24px rgba(15,23,42,.1)',
             animation: 'qjIn .14s ease-out',
+            overflow: 'hidden',
           }}
         >
-          {!sessionId && <div style={emptyStyle}>{t('noSession')}</div>}
-          {sessionId && items.length === 0 && <div style={emptyStyle}>{t('empty')}</div>}
-          {items.map((item, idx) => {
-            const active = idx === activeIdx
-            return (
-              <button
-                key={item.msgId}
-                type="button"
-                data-qj-idx={idx}
-                title={item.query}
-                onClick={() => void onJump(item.msgId, idx)}
-                style={{
-                  ...rowStyle,
-                  background: active
-                    ? 'var(--dsw-alias-bg-layer-3, #fff)'
-                    : 'transparent',
-                  boxShadow: active
-                    ? '0 4px 14px rgba(15,23,42,.12), 0 1px 3px rgba(15,23,42,.06)'
-                    : 'none',
-                  transform: active ? 'translateY(-1px)' : 'none',
-                  zIndex: active ? 1 : 0,
-                  position: 'relative',
-                }}
-              >
-                <span
-                  aria-hidden
+          <div
+            ref={listRef}
+            style={{
+              flex: 1,
+              overflow: 'auto',
+              maxHeight: LIST_H,
+              padding: '6px 4px 4px',
+            }}
+          >
+            {!sessionId && <div style={emptyStyle}>{t('noSession')}</div>}
+            {sessionId && items.length === 0 && <div style={emptyStyle}>{t('empty')}</div>}
+            {items.map((item, idx) => {
+              const active = idx === activeIdx
+              return (
+                <button
+                  key={item.msgId}
+                  type="button"
+                  data-qj-idx={idx}
+                  title={item.query}
+                  onClick={() => void onJump(item.msgId, idx)}
                   style={{
-                    ...emojiStyle,
-                    opacity: active ? 1 : 0.55,
-                    transform: active ? 'scale(1.08)' : 'scale(1)',
+                    ...rowStyle,
+                    background: active ? 'var(--dsw-alias-bg-layer-3, #fff)' : 'transparent',
+                    boxShadow: active
+                      ? '0 4px 14px rgba(15,23,42,.12), 0 1px 3px rgba(15,23,42,.06)'
+                      : 'none',
+                    transform: active ? 'translateY(-1px)' : 'none',
+                    zIndex: active ? 1 : 0,
+                    position: 'relative',
                   }}
                 >
-                  {EMOJI}
-                </span>
-                <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
-                  <span
-                    style={{
-                      display: 'block',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      fontSize: 12.5,
-                      lineHeight: 1.3,
-                      fontWeight: active ? 600 : 400,
-                    }}
-                  >
-                    {item.query}
+                  {markerOf(idx, active)}
+                  <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+                    <span
+                      style={{
+                        display: 'block',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        fontSize: 12.5,
+                        lineHeight: 1.3,
+                        fontWeight: active ? 600 : 400,
+                      }}
+                    >
+                      {item.query}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: 'var(--dsw-alias-label-secondary, #8a8f98)',
+                      }}
+                    >
+                      {formatTime(item.createAt)}
+                    </span>
                   </span>
-                  <span
-                    style={{
-                      fontSize: 11,
-                      color: 'var(--dsw-alias-label-secondary, #8a8f98)',
-                    }}
-                  >
-                    {formatTime(item.createAt)}
-                  </span>
-                </span>
+                </button>
+              )
+            })}
+          </div>
+
+          <div style={cfgBarStyle}>
+            <label style={cfgLabelStyle}>
+              <input
+                type="checkbox"
+                checked={enable}
+                onChange={(e) => void patchConfig({ enable: e.target.checked })}
+                style={{ margin: 0 }}
+              />
+              {t('enable')}
+            </label>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button
+                type="button"
+                title={t('markerEmoji')}
+                onClick={() => void patchConfig({ markerStyle: 'emoji' })}
+                style={{
+                  ...segBtnStyle,
+                  background:
+                    markerStyle === 'emoji'
+                      ? 'var(--dsw-alias-bg-layer-2, rgba(0,0,0,.06))'
+                      : 'transparent',
+                  fontWeight: markerStyle === 'emoji' ? 600 : 400,
+                }}
+              >
+                {EMOJI}
               </button>
-            )
-          })}
+              <button
+                type="button"
+                title={t('markerNumber')}
+                onClick={() => void patchConfig({ markerStyle: 'number' })}
+                style={{
+                  ...segBtnStyle,
+                  background:
+                    markerStyle === 'number'
+                      ? 'var(--dsw-alias-bg-layer-2, rgba(0,0,0,.06))'
+                      : 'transparent',
+                  fontWeight: markerStyle === 'number' ? 600 : 400,
+                }}
+              >
+                1
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -634,6 +771,49 @@ const emojiStyle: React.CSSProperties = {
   lineHeight: '18px',
   textAlign: 'center',
   transition: 'opacity .12s, transform .12s',
+}
+
+const numStyle: React.CSSProperties = {
+  flexShrink: 0,
+  width: 18,
+  height: 18,
+  marginTop: 1,
+  borderRadius: 9,
+  fontSize: 10,
+  lineHeight: '18px',
+  textAlign: 'center',
+}
+
+const cfgBarStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  padding: '6px 8px',
+  borderTop: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.06))',
+  flexShrink: 0,
+}
+
+const cfgLabelStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  fontSize: 11,
+  color: 'var(--dsw-alias-label-secondary, #8a8f98)',
+  cursor: 'pointer',
+  userSelect: 'none',
+}
+
+const segBtnStyle: React.CSSProperties = {
+  border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08))',
+  borderRadius: 6,
+  width: 26,
+  height: 22,
+  padding: 0,
+  fontSize: 12,
+  lineHeight: '20px',
+  cursor: 'pointer',
+  color: 'inherit',
 }
 
 export function apply(ctx: any) {

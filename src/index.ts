@@ -19,6 +19,8 @@ export interface Config {
   enable: boolean
   maxQuery: number
   includeSteering: boolean
+  /** 列表前缀：emoji 符号 / number 序号 */
+  markerStyle: 'emoji' | 'number'
 }
 
 const CHANNEL = '/query-jump'
@@ -29,6 +31,7 @@ const DEFAULTS: Config = {
   enable: true,
   maxQuery: 200,
   includeSteering: false,
+  markerStyle: 'emoji',
 }
 
 const clearMask = new Map<string, Set<string>>()
@@ -36,12 +39,17 @@ const incremental = new Map<string, QueryJumpState>()
 const persistTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const hydrated = new Set<string>()
 
+function resolveMarkerStyle(raw: unknown): 'emoji' | 'number' {
+  return raw === 'number' ? 'number' : 'emoji'
+}
+
 function resolveConfig(raw: Partial<Config> | undefined): Config {
   return {
     enable: typeof raw?.enable === 'boolean' ? raw.enable : DEFAULTS.enable,
     maxQuery: typeof raw?.maxQuery === 'number' && raw.maxQuery > 0 ? raw.maxQuery : DEFAULTS.maxQuery,
     includeSteering:
       typeof raw?.includeSteering === 'boolean' ? raw.includeSteering : DEFAULTS.includeSteering,
+    markerStyle: resolveMarkerStyle(raw?.markerStyle),
   }
 }
 
@@ -49,6 +57,9 @@ export const Config = Schema.object({
   enable: Schema.boolean().default(DEFAULTS.enable).description('启用会话 Query 定位面板'),
   maxQuery: Schema.number().default(DEFAULTS.maxQuery).description('单会话最多保留条数'),
   includeSteering: Schema.boolean().default(DEFAULTS.includeSteering).description('是否纳入 steering 消息'),
+  markerStyle: Schema.string()
+    .default(DEFAULTS.markerStyle)
+    .description('列表前缀：emoji=🤗 / number=序号'),
 })
 
 function ok(value: unknown) {
@@ -220,6 +231,7 @@ export function apply(ctx: any, config?: Partial<Config>) {
             enable: s.enable,
             maxQuery: s.maxQuery,
             includeSteering: s.includeSteering,
+            markerStyle: s.markerStyle,
             projectionKey: PROJECTION_KEY,
             settingsNamespace: SETTINGS_NS,
           })
@@ -230,7 +242,33 @@ export function apply(ctx: any, config?: Partial<Config>) {
           const next = { ...s, enable: payload.enable }
           live = next
           await writeSettings(settingsScope, { enable: payload.enable })
-          return ok({ enable: next.enable })
+          return ok({ enable: next.enable, markerStyle: next.markerStyle })
+        }
+        case 'setConfig': {
+          const patch: Partial<Config> = {}
+          if (typeof payload?.enable === 'boolean') patch.enable = payload.enable
+          if (payload?.markerStyle === 'emoji' || payload?.markerStyle === 'number') {
+            patch.markerStyle = payload.markerStyle
+          }
+          if (typeof payload?.maxQuery === 'number' && payload.maxQuery > 0) {
+            patch.maxQuery = payload.maxQuery
+          }
+          if (typeof payload?.includeSteering === 'boolean') {
+            patch.includeSteering = payload.includeSteering
+          }
+          if (Object.keys(patch).length === 0) {
+            return badRequest('setConfig requires enable | markerStyle | maxQuery | includeSteering')
+          }
+          const s = readFromScope(settingsScope, live)
+          const next = resolveConfig({ ...s, ...patch })
+          live = next
+          await writeSettings(settingsScope, patch)
+          return ok({
+            enable: next.enable,
+            markerStyle: next.markerStyle,
+            maxQuery: next.maxQuery,
+            includeSteering: next.includeSteering,
+          })
         }
         case 'list': {
           const sessionId = payload?.sessionId
@@ -246,6 +284,7 @@ export function apply(ctx: any, config?: Partial<Config>) {
           return ok({
             sessionId,
             enable: s.enable,
+            markerStyle: s.markerStyle,
             messages,
           })
         }

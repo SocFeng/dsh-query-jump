@@ -174,17 +174,18 @@ dsh --profile web --dump-config
 | 点击较早历史 | 必要时先 `loadOlder` 再跳转 |
 | 「清空」 | 仅屏蔽本插件列表（mask），不删聊天 |
 | 切换会话 | 自动换列表；磁盘缓存按会话隔离 |
-| `enable: false` | 完全不渲染，零存在感 |
+| `enable: false` | 右侧留一个 🤗 入口，点击可重新开启 |
 
 ---
 
-## 配置项（开关放设置 / Config）
+## 配置项（设置 / 面板底栏 / Config）
 
-面板内**已去掉常驻开关**，避免显示疲劳。请用配置控制：
+悬停列表**底部**可改「启用」与前缀（🤗 / 序号）；同时写入 settings（若 Web「插件配置」白名单放行也会出现）。
 
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `enable` | `boolean` | `true` | 总开关；关闭后前端完全不渲染 |
+| `enable` | `boolean` | `true` | 总开关；关闭后只留重开入口 |
+| `markerStyle` | `'emoji' \| 'number'` | `'emoji'` | 列表前缀：🤗 或序号 |
 | `maxQuery` | `number` | `200` | 单会话最多保留条数 |
 | `includeSteering` | `boolean` | `false` | 是否纳入 steering |
 
@@ -195,11 +196,12 @@ dsh --profile web --dump-config
     name: dsh-query-jump
     config:
       enable: true
+      markerStyle: emoji
       maxQuery: 200
 ```
 
 Host 会 `settings.register('dsh-query-jump')` 并尝试 `expose: true`。  
-若本机 DSH 的 Web「设置→插件配置」仍有白名单限制，卡片可能暂不出现——**用上面的 `config.enable` 即可**，效果等同设置开关。
+若本机 DSH 的 Web「设置→插件配置」仍有白名单限制，卡片可能暂不出现——**用面板底栏或上面的 config 即可**。
 
 ### 定位数据会丢吗？
 
