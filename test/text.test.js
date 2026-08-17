@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   applyProjectionEvent,
+  fuzzyMatch,
   isUserQueryEvent,
   textOf,
 } from '../lib/index.js'
@@ -96,5 +97,17 @@ describe('applyProjectionEvent', () => {
     }
     assert.equal(state.messages.length, 3)
     assert.equal(state.messages[0].id, 'm2')
+  })
+})
+
+describe('fuzzyMatch', () => {
+  it('matches substring', () => {
+    assert.equal(fuzzyMatch('你好世界', '世界'), true)
+  })
+  it('matches subsequence', () => {
+    assert.equal(fuzzyMatch('hello world', 'hlo'), true)
+  })
+  it('rejects non-match', () => {
+    assert.equal(fuzzyMatch('abc', 'xyz'), false)
   })
 })

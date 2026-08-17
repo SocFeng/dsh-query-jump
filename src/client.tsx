@@ -1,12 +1,14 @@
 /**
- * dsh-query-jump — browser half（通义风 / 低存在感）
+ * dsh-query-jump — browser half
  *
- * - 默认几乎不可见：对话区右缘一条透明热区
- * - 鼠标靠近热区才滑出提问列表（类似通义会话导航）
- * - 贴 `[data-conversation-scroll]` 右边界，侧栏打开时自动内收
- * - 开关以 settings / Config 为准；关闭时完全不渲染，避免显示疲劳
+ * 通义风短横线导航：
+ * - 平时：对话区右缘淡色 tick rail（有存在感但不抢眼）
+ * - 当前阅读位置：更深色 tick + 列表高亮
+ * - 悬停 rail / 面板：弹出「提问记录」+ 模糊搜索
+ * - 列表约 20 条可视高度，可滚动；贴 conversation-scroll 边界
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { fuzzyMatch } from './text.js'
 
 export const inject = ['slots', 'connection', 'locale']
 
@@ -17,34 +19,54 @@ const FLOW_KEY = 'data-chat-flow-key'
 const FLOW_KIND = 'data-chat-flow-kind'
 const SCROLL_SEL = '[data-conversation-scroll]'
 const FULL_LOAD_PAGES = 120
-const PANEL_W = 280
-const HOT_W = 10
-const EDGE_GAP = 4
-const COLLAPSE_DELAY_MS = 280
+
+const RAIL_W = 22
+const TICK_GAP = 8
+const TICK_H = 2
+const EDGE_GAP = 6
+const PANEL_W = 300
+const ROW_H = 34
+const VISIBLE_ROWS = 20
+const LIST_H = ROW_H * VISIBLE_ROWS
+const COLLAPSE_MS = 260
+const READ_LINE = 0.38
 
 const zh = {
   title: '提问记录',
+  search: '搜索提问…',
   clear: '清空',
   empty: '暂无提问',
+  noMatch: '无匹配结果',
   noSession: '请先打开会话',
   jumpFail: '无法定位该消息',
 }
 
-type DockGeo = { right: number; top: number; height: number }
+type Item = { msgId: string; query: string; createAt: number; seq: number }
+type DockGeo = { right: number; top: number; railH: number }
 
 function delay(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms))
+  return new Promise<void>((r) => setTimeout(r, ms))
 }
 
 function measureDock(): DockGeo | null {
   const sc = document.querySelector(SCROLL_SEL) as HTMLElement | null
   if (!sc) return null
   const rect = sc.getBoundingClientRect()
-  if (rect.width < 80 || rect.height < 80) return null
+  if (rect.width < 80 || rect.height < 120) return null
   const right = Math.max(EDGE_GAP, Math.round(window.innerWidth - rect.right + EDGE_GAP))
-  const top = Math.max(48, Math.round(rect.top + 24))
-  const height = Math.max(180, Math.min(Math.round(rect.height - 40), Math.round(window.innerHeight * 0.78)))
-  return { right, top, height }
+  const railH = Math.max(120, Math.min(Math.round(rect.height * 0.72), 520))
+  const top = Math.max(48, Math.round(rect.top + (rect.height - railH) / 2))
+  return { right, top, railH }
+}
+
+function findRowByMsgId(msgId: string): HTMLElement | null {
+  for (const node of Array.from(document.querySelectorAll(`[${FLOW_KEY}]`))) {
+    const kind = node.getAttribute(FLOW_KIND)
+    if (kind && kind !== 'user') continue
+    const key = node.getAttribute(FLOW_KEY) || ''
+    if (key.includes(msgId)) return node as HTMLElement
+  }
+  return null
 }
 
 function windowHasId(snap: any, id: string): boolean {
@@ -70,7 +92,7 @@ async function loadUntilIdLoaded(face: any, id: string) {
     } catch {
       return
     }
-    if (snap == null || snap.openState === 'error') return
+    if (!snap || snap.openState === 'error') return
     if (snap.openState !== 'open') {
       await delay(120)
       continue
@@ -90,23 +112,10 @@ async function loadUntilIdLoaded(face: any, id: string) {
   }
 }
 
-function findRowByMsgId(msgId: string): HTMLElement | null {
-  const nodes = document.querySelectorAll(`[${FLOW_KEY}]`)
-  for (const node of Array.from(nodes)) {
-    const kind = node.getAttribute(FLOW_KIND)
-    if (kind && kind !== 'user') continue
-    const key = node.getAttribute(FLOW_KEY) || ''
-    if (key.includes(msgId)) return node as HTMLElement
-  }
-  return null
-}
-
 function formatTime(ts: number): string {
   try {
     const d = new Date(ts)
-    const hh = String(d.getHours()).padStart(2, '0')
-    const mm = String(d.getMinutes()).padStart(2, '0')
-    return `${hh}:${mm}`
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
   } catch {
     return ''
   }
@@ -114,16 +123,21 @@ function formatTime(ts: number): string {
 
 type Rpc = { call: (ch: string, endpoint: string, body?: unknown) => Promise<any> }
 
-type PanelProps = {
+function QueryJumpPanel({
+  ctx,
+  useSessions,
+  useProjection,
+  rpc,
+  t,
+  isLoopback,
+}: {
   ctx: any
   useSessions: (sel: (s: any) => any) => any
   useProjection?: (key: string) => any
   rpc: Rpc
   t: (k: string) => string
   isLoopback: boolean
-}
-
-function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }: PanelProps) {
+}) {
   const sessionId = useSessions((s) => s.current) as string | undefined
   const projected = useProjection?.(PROJECTION_KEY) as
     | { messages?: Array<{ seq: number; time: number; text: string; id?: string }> }
@@ -131,79 +145,146 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
 
   const [enable, setEnable] = useState(true)
   const [mask, setMask] = useState<Set<string>>(() => new Set())
-  const [busy, setBusy] = useState(false)
-  const [open, setOpen] = useState(false)
-  const [geo, setGeo] = useState<DockGeo | null>(null)
   const [rpcMessages, setRpcMessages] = useState<
     Array<{ seq: number; time: number; text: string; id?: string }>
   >([])
+  const [geo, setGeo] = useState<DockGeo | null>(null)
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [activeIdx, setActiveIdx] = useState(-1)
+  const [busy, setBusy] = useState(false)
+  const [railScroll, setRailScroll] = useState(0)
 
   const hoverRef = useRef(false)
   const collapseTimer = useRef<number | null>(null)
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const searchRef = useRef<HTMLInputElement | null>(null)
 
-  const clearCollapseTimer = () => {
+  const items = useMemo(() => {
+    const fromProj = (projected?.messages ?? []).filter((m) => m.id && !mask.has(String(m.id)))
+    const source = fromProj.length > 0 ? fromProj : rpcMessages
+    return source.map(
+      (m): Item => ({
+        msgId: String(m.id),
+        query: m.text || '(空)',
+        createAt: m.time,
+        seq: m.seq,
+      }),
+    )
+  }, [projected, mask, rpcMessages])
+
+  const filtered = useMemo(() => {
+    if (!query.trim()) return items
+    return items.filter((it) => fuzzyMatch(it.query, query))
+  }, [items, query])
+
+  const clearCollapse = () => {
     if (collapseTimer.current != null) {
       window.clearTimeout(collapseTimer.current)
       collapseTimer.current = null
     }
   }
 
-  const scheduleCollapse = () => {
-    clearCollapseTimer()
-    collapseTimer.current = window.setTimeout(() => {
-      if (!hoverRef.current) setOpen(false)
-    }, COLLAPSE_DELAY_MS)
-  }
-
   const onEnter = () => {
     hoverRef.current = true
-    clearCollapseTimer()
+    clearCollapse()
     setOpen(true)
+    window.setTimeout(() => searchRef.current?.focus(), 40)
   }
 
   const onLeave = () => {
     hoverRef.current = false
-    scheduleCollapse()
+    clearCollapse()
+    collapseTimer.current = window.setTimeout(() => {
+      if (!hoverRef.current) {
+        setOpen(false)
+        setQuery('')
+      }
+    }, COLLAPSE_MS)
   }
 
   const refreshGeo = useCallback(() => {
     const next = measureDock()
     setGeo((prev) => {
       if (!next) return prev
-      if (prev && prev.right === next.right && prev.top === next.top && prev.height === next.height) {
+      if (prev && prev.right === next.right && prev.top === next.top && prev.railH === next.railH) {
         return prev
       }
       return next
     })
   }, [])
 
+  /** 阅读线 scroll-spy：哪个用户消息最接近视口 READ_LINE */
+  const spyActive = useCallback(() => {
+    const sc = document.querySelector(SCROLL_SEL) as HTMLElement | null
+    if (!sc || items.length === 0) {
+      setActiveIdx(-1)
+      return
+    }
+    const srect = sc.getBoundingClientRect()
+    const lineY = srect.top + srect.height * READ_LINE
+    let best = -1
+    let bestDist = Infinity
+    items.forEach((it, idx) => {
+      const row = findRowByMsgId(it.msgId)
+      if (!row) return
+      const r = row.getBoundingClientRect()
+      const mid = (r.top + r.bottom) / 2
+      const dist = Math.abs(mid - lineY)
+      if (dist < bestDist) {
+        bestDist = dist
+        best = idx
+      }
+    })
+    setActiveIdx(best)
+  }, [items])
+
   useEffect(() => {
     refreshGeo()
-    const onResize = () => refreshGeo()
-    window.addEventListener('resize', onResize)
+    spyActive()
     const sc = document.querySelector(SCROLL_SEL)
+    const onScroll = () => spyActive()
+    const onResize = () => {
+      refreshGeo()
+      spyActive()
+    }
+    sc?.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('resize', onResize)
     let ro: ResizeObserver | null = null
     if (sc && typeof ResizeObserver !== 'undefined') {
-      ro = new ResizeObserver(() => refreshGeo())
+      ro = new ResizeObserver(() => {
+        refreshGeo()
+        spyActive()
+      })
       ro.observe(sc)
-      if (sc.parentElement) ro.observe(sc.parentElement)
     }
-    const tick = window.setInterval(refreshGeo, 400)
+    const tick = window.setInterval(() => {
+      refreshGeo()
+      spyActive()
+    }, 600)
     return () => {
+      sc?.removeEventListener('scroll', onScroll)
       window.removeEventListener('resize', onResize)
       ro?.disconnect()
       window.clearInterval(tick)
-      clearCollapseTimer()
+      clearCollapse()
     }
-  }, [refreshGeo])
+  }, [refreshGeo, spyActive])
+
+  // 打开面板时把当前项滚进列表可视区
+  useEffect(() => {
+    if (!open || activeIdx < 0 || !listRef.current) return
+    const el = listRef.current.querySelector(`[data-qj-idx="${activeIdx}"]`) as HTMLElement | null
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [open, activeIdx])
 
   const refreshConfig = useCallback(async () => {
     if (!isLoopback) return
     try {
       const res = await rpc.call(CHANNEL, 'getConfig', {})
       if (res?.ok) setEnable(!!res.value.enable)
-    } catch (err) {
-      console.warn('[dsh-query-jump] getConfig', err)
+    } catch {
+      /* ignore */
     }
   }, [rpc, isLoopback])
 
@@ -215,8 +296,8 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
     try {
       const res = await rpc.call(CHANNEL, 'getMask', { sessionId })
       if (res?.ok) setMask(new Set((res.value.msgIds ?? []).map(String)))
-    } catch (err) {
-      console.warn('[dsh-query-jump] getMask', err)
+    } catch {
+      /* ignore */
     }
   }, [rpc, isLoopback, sessionId])
 
@@ -231,15 +312,15 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
         if (typeof res.value.enable === 'boolean') setEnable(res.value.enable)
         setRpcMessages(res.value.messages ?? [])
       }
-    } catch (err) {
-      console.warn('[dsh-query-jump] list', err)
+    } catch {
+      /* ignore */
     }
   }, [rpc, isLoopback, sessionId])
 
   useEffect(() => {
     void refreshConfig()
-    const timer = window.setInterval(() => void refreshConfig(), 3000)
-    return () => window.clearInterval(timer)
+    const tmr = window.setInterval(() => void refreshConfig(), 3000)
+    return () => window.clearInterval(tmr)
   }, [refreshConfig])
 
   useEffect(() => {
@@ -249,37 +330,22 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
   useEffect(() => {
     void refreshList()
     if (!sessionId || !isLoopback) return
-    const timer = window.setInterval(() => void refreshList(), 1500)
-    return () => window.clearInterval(timer)
+    const tmr = window.setInterval(() => void refreshList(), 1500)
+    return () => window.clearInterval(tmr)
   }, [refreshList, sessionId, isLoopback])
-
-  const items = useMemo(() => {
-    const fromProj = (projected?.messages ?? []).filter((m) => m.id && !mask.has(String(m.id)))
-    const source = fromProj.length > 0 ? fromProj : rpcMessages
-    return source.map((m) => ({
-      msgId: String(m.id),
-      query: m.text || '(空)',
-      createAt: m.time,
-      seq: m.seq,
-    }))
-  }, [projected, mask, rpcMessages])
 
   const onClear = async () => {
     if (!sessionId) return
-    const ids = items.map((i) => i.msgId)
-    try {
-      await rpc.call(CHANNEL, 'clearMask', { sessionId, msgIds: ids })
-      await refreshMask()
-      await refreshList()
-    } catch (err) {
-      console.warn('[dsh-query-jump] clearMask', err)
-    }
+    await rpc.call(CHANNEL, 'clearMask', { sessionId, msgIds: items.map((i) => i.msgId) })
+    await refreshMask()
+    await refreshList()
   }
 
-  const onJump = async (msgId: string) => {
+  const onJump = async (msgId: string, idxInAll?: number) => {
     if (busy || !sessionId) return
     setBusy(true)
     try {
+      if (typeof idxInAll === 'number') setActiveIdx(idxInAll)
       let row = findRowByMsgId(msgId)
       if (!row) {
         let face: any = null
@@ -307,18 +373,25 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
       window.setTimeout(() => {
         row!.style.outline = prev
       }, 1200)
+      window.setTimeout(() => spyActive(), 350)
     } finally {
       setBusy(false)
     }
   }
 
-  // 开关关闭：完全不渲染，零存在感
-  if (!enable || !isLoopback) return null
-  if (!geo) return null
-  // 还没有任何提问时也不占位（避免空热区打扰）
-  if (items.length === 0 && !open) return null
+  if (!enable || !isLoopback || !geo || items.length === 0) return null
 
-  const { right, top, height } = geo
+  const { right, top, railH } = geo
+  const contentH = Math.max(railH, (items.length - 1) * TICK_GAP + TICK_H + 8)
+  const maxRailScroll = Math.max(0, contentH - railH)
+  const offset = Math.min(railScroll, maxRailScroll)
+
+  const onRailWheel = (e: React.WheelEvent) => {
+    if (maxRailScroll <= 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    setRailScroll((v) => Math.min(maxRailScroll, Math.max(0, v + e.deltaY)))
+  }
 
   return (
     <div
@@ -327,58 +400,112 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
         zIndex: 45,
         right,
         top,
-        width: open ? PANEL_W : HOT_W,
-        height: open ? height : Math.min(220, height),
+        height: railH,
         display: 'flex',
-        justifyContent: 'flex-end',
+        flexDirection: 'row-reverse',
+        alignItems: 'stretch',
+        gap: 8,
         pointerEvents: 'auto',
-        transition: 'width .2s ease',
       }}
       onPointerEnter={onEnter}
       onPointerLeave={onLeave}
     >
-      {/* 收起：几乎透明的热区，仅悬停可感知 */}
-      {!open && (
+      {/* tick rail */}
+      <div
+        style={{
+          width: RAIL_W,
+          height: railH,
+          position: 'relative',
+          overflow: 'hidden',
+          borderRadius: 8,
+          background: 'transparent',
+        }}
+        onWheel={onRailWheel}
+      >
         <div
           style={{
-            width: HOT_W,
-            height: '100%',
-            borderRadius: 6,
-            background: 'transparent',
-            cursor: 'ew-resize',
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: -offset,
+            height: contentH,
+            paddingTop: 4,
           }}
-          title={t('title')}
-        />
-      )}
+        >
+          {items.map((it, idx) => {
+            const active = idx === activeIdx
+            return (
+              <button
+                key={it.msgId}
+                type="button"
+                title={it.query.slice(0, 80)}
+                onClick={() => void onJump(it.msgId, idx)}
+                style={{
+                  position: 'absolute',
+                  left: active ? 4 : 6,
+                  right: active ? 4 : 6,
+                  top: 4 + idx * TICK_GAP,
+                  height: active ? 3 : TICK_H,
+                  border: 'none',
+                  borderRadius: 2,
+                  padding: 0,
+                  cursor: 'pointer',
+                  background: active
+                    ? 'var(--dsw-alias-label-primary, #3d3d3d)'
+                    : 'var(--dsw-alias-label-dimmed, rgba(0,0,0,.28))',
+                  opacity: active ? 1 : 0.72,
+                  transition: 'background .12s, left .12s, right .12s, height .12s',
+                }}
+              />
+            )
+          })}
+        </div>
+      </div>
 
-      {/* 展开：通义风滑出卡片 */}
+      {/* 弹出列表 */}
       {open && (
         <div
           style={{
             width: PANEL_W,
-            height: '100%',
+            height: Math.min(railH, 56 + LIST_H),
             display: 'flex',
             flexDirection: 'column',
-            background: 'var(--dsw-alias-bg-layer-3, rgba(255,255,255,.96))',
-            border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.06))',
+            background: 'var(--dsw-alias-bg-layer-3, #fff)',
+            border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08))',
             borderRadius: 12,
-            boxShadow: '0 10px 40px rgba(15,23,42,.12)',
-            color: 'var(--dsw-alias-label-primary, #1f2329)',
-            backdropFilter: 'blur(8px)',
+            boxShadow: '0 12px 36px rgba(15,23,42,.14)',
             overflow: 'hidden',
-            animation: 'qjSlideIn .18s ease-out',
+            animation: 'qjIn .16s ease-out',
           }}
         >
           <div
             style={{
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '12px 14px 8px',
-              flexShrink: 0,
+              gap: 8,
+              padding: '10px 10px 8px',
+              borderBottom: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.06))',
             }}
           >
-            <div style={{ fontSize: 13, fontWeight: 600 }}>{t('title')}</div>
+            <div style={{ fontSize: 13, fontWeight: 600, flexShrink: 0 }}>{t('title')}</div>
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t('search')}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                height: 28,
+                borderRadius: 8,
+                border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))',
+                padding: '0 10px',
+                fontSize: 12,
+                outline: 'none',
+                background: 'var(--dsw-alias-bg-layer-2, #f5f6f8)',
+                color: 'inherit',
+              }}
+            />
             <button
               type="button"
               onClick={() => void onClear()}
@@ -388,60 +515,90 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
                 color: 'var(--dsw-alias-label-secondary, #8a8f98)',
                 fontSize: 12,
                 cursor: 'pointer',
-                padding: '2px 4px',
+                flexShrink: 0,
               }}
             >
               {t('clear')}
             </button>
           </div>
 
-          <div style={{ overflow: 'auto', flex: 1, padding: '0 8px 10px' }}>
+          <div
+            ref={listRef}
+            style={{
+              flex: 1,
+              overflow: 'auto',
+              maxHeight: LIST_H,
+              padding: '4px 6px 8px',
+            }}
+          >
             {!sessionId && <div style={emptyStyle}>{t('noSession')}</div>}
-            {sessionId && items.length === 0 && <div style={emptyStyle}>{t('empty')}</div>}
-            {items.map((item, idx) => (
-              <button
-                key={item.msgId}
-                type="button"
-                title={item.query}
-                onClick={() => void onJump(item.msgId)}
-                style={itemStyle}
-              >
-                <span style={idxStyle}>{idx + 1}</span>
-                <span style={{ flex: 1, minWidth: 0 }}>
+            {sessionId && filtered.length === 0 && (
+              <div style={emptyStyle}>{items.length === 0 ? t('empty') : t('noMatch')}</div>
+            )}
+            {filtered.map((item) => {
+              const idxAll = items.findIndex((x) => x.msgId === item.msgId)
+              const active = idxAll === activeIdx
+              return (
+                <button
+                  key={item.msgId}
+                  type="button"
+                  data-qj-idx={idxAll}
+                  title={item.query}
+                  onClick={() => void onJump(item.msgId, idxAll)}
+                  style={{
+                    ...rowStyle,
+                    background: active
+                      ? 'var(--dsw-alias-interactive-bg-hover, rgba(97,92,237,.1))'
+                      : 'transparent',
+                    boxShadow: active
+                      ? 'inset 2px 0 0 var(--dsw-alias-brand-primary, #615ced)'
+                      : 'none',
+                  }}
+                >
                   <span
                     style={{
-                      display: 'block',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      fontSize: 13,
-                      lineHeight: 1.4,
-                      textAlign: 'left',
+                      ...idxStyle,
+                      background: active
+                        ? 'var(--dsw-alias-brand-primary, #615ced)'
+                        : 'var(--dsw-alias-bg-layer-2, rgba(0,0,0,.05))',
+                      color: active ? '#fff' : 'var(--dsw-alias-label-secondary, #8a8f98)',
                     }}
                   >
-                    {item.query}
+                    {idxAll + 1}
                   </span>
-                  <span
-                    style={{
-                      display: 'block',
-                      marginTop: 2,
-                      fontSize: 11,
-                      color: 'var(--dsw-alias-label-secondary, #8a8f98)',
-                      textAlign: 'left',
-                    }}
-                  >
-                    {formatTime(item.createAt)}
+                  <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+                    <span
+                      style={{
+                        display: 'block',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        fontSize: 12.5,
+                        lineHeight: 1.35,
+                        fontWeight: active ? 600 : 400,
+                      }}
+                    >
+                      {item.query}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: 'var(--dsw-alias-label-secondary, #8a8f98)',
+                      }}
+                    >
+                      {formatTime(item.createAt)}
+                    </span>
                   </span>
-                </span>
-              </button>
-            ))}
+                </button>
+              )
+            })}
           </div>
         </div>
       )}
 
       <style>{`
-        @keyframes qjSlideIn {
-          from { opacity: 0; transform: translateX(12px); }
+        @keyframes qjIn {
+          from { opacity: 0; transform: translateX(10px); }
           to { opacity: 1; transform: translateX(0); }
         }
       `}</style>
@@ -452,20 +609,20 @@ function QueryJumpPanel({ ctx, useSessions, useProjection, rpc, t, isLoopback }:
 const emptyStyle: React.CSSProperties = {
   color: 'var(--dsw-alias-label-secondary, #8a8f98)',
   fontSize: 12,
-  padding: '16px 8px',
+  padding: '20px 8px',
   textAlign: 'center',
 }
 
-const itemStyle: React.CSSProperties = {
+const rowStyle: React.CSSProperties = {
   width: '100%',
   display: 'flex',
   alignItems: 'flex-start',
-  gap: 10,
-  padding: '10px 8px',
-  marginBottom: 2,
+  gap: 8,
+  minHeight: ROW_H,
+  padding: '6px 8px',
+  marginBottom: 1,
   border: 'none',
   borderRadius: 8,
-  background: 'transparent',
   cursor: 'pointer',
   color: 'inherit',
 }
@@ -476,18 +633,16 @@ const idxStyle: React.CSSProperties = {
   height: 18,
   marginTop: 1,
   borderRadius: 9,
-  fontSize: 11,
+  fontSize: 10,
   lineHeight: '18px',
   textAlign: 'center',
-  color: 'var(--dsw-alias-label-secondary, #8a8f98)',
-  background: 'var(--dsw-alias-bg-layer-2, rgba(0,0,0,.04))',
 }
 
 export function apply(ctx: any) {
   try {
     ctx.effect(() => ctx.locale.register(NS, 'zh', zh), 'dsh-query-jump: zh')
-  } catch (err) {
-    console.warn('[dsh-query-jump] locale.register skipped', err)
+  } catch {
+    /* ignore */
   }
 
   const rpc = ctx.connection.rpc

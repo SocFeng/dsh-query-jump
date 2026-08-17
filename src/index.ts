@@ -286,4 +286,4 @@ export function apply(ctx: any, config?: Partial<Config>) {
 }
 
 export { CHANNEL, PROJECTION_KEY, clearMask, buildProjection }
-export { applyProjectionEvent, isUserQueryEvent, textOf } from './text.js'
+export { applyProjectionEvent, isUserQueryEvent, textOf, fuzzyMatch } from './text.js'

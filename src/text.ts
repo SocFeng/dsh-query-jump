@@ -66,3 +66,17 @@ export function applyProjectionEvent(
   }
   return { messages: [...state.messages, entry].slice(-maxQuery) }
 }
+
+/** 模糊：子串 或 子序列 */
+export function fuzzyMatch(text: string, query: string): boolean {
+  const t = text.toLowerCase()
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  if (t.includes(q)) return true
+  let i = 0
+  for (const ch of t) {
+    if (ch === q[i]) i++
+    if (i >= q.length) return true
+  }
+  return false
+}
