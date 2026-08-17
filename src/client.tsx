@@ -115,7 +115,7 @@ async function loadUntilIdLoaded(face: any, id: string) {
   }
 }
 
-/** 滚到目标行；回答流式贴底时持续短暂压制，避免立刻被拽回底部 */
+/** 滚到目标行；先平滑过渡，再短暂压制流式贴底，避免动画被掐断 */
 function scrollRowIntoConversation(row: HTMLElement, holdMs = SCROLL_HOLD_MS): () => void {
   const sc = document.querySelector(SCROLL_SEL) as HTMLElement | null
   if (!sc) {
@@ -134,46 +134,55 @@ function scrollRowIntoConversation(row: HTMLElement, holdMs = SCROLL_HOLD_MS): (
     return Math.max(0, sc.scrollTop + (rrect.top - srect.top) - pad)
   }
 
-  // 先发一次向上滚轮，打断宿主「贴底跟随」
+  // 打断宿主「贴底跟随」，但不改 scrollTop（避免抢走 smooth）
   try {
     sc.dispatchEvent(
-      new WheelEvent('wheel', { deltaY: -40, bubbles: true, cancelable: true }),
+      new WheelEvent('wheel', { deltaY: -1, bubbles: true, cancelable: true }),
     )
   } catch {
     /* ignore */
   }
 
-  let target = desiredTop()
-  const before = sc.scrollTop
+  const target = desiredTop()
   try {
     sc.scrollTo({ top: target, behavior: 'smooth' })
   } catch {
-    sc.scrollTop = target
-  }
-
-  const until = Date.now() + holdMs
-  let cancelled = false
-  const tick = window.setInterval(() => {
-    if (cancelled || Date.now() > until || !document.contains(row) || !document.contains(sc)) {
-      window.clearInterval(tick)
-      return
-    }
-    target = desiredTop()
-    if (Math.abs(sc.scrollTop - target) > 36) {
+    try {
+      row.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+    } catch {
       sc.scrollTop = target
     }
-  }, 80)
+  }
 
-  window.setTimeout(() => {
-    if (cancelled || !document.contains(sc)) return
-    if (Math.abs(sc.scrollTop - before) < 4) {
-      sc.scrollTop = desiredTop()
-    }
-  }, 220)
+  let cancelled = false
+  let tick = 0
+  // 等平滑动画大致结束后再锁位，避免中途 instant 赋值打断过渡
+  const animMs = 480
+  const holdDelay = window.setTimeout(() => {
+    if (cancelled || !document.contains(row) || !document.contains(sc)) return
+    const until = Date.now() + Math.max(0, holdMs - animMs)
+    tick = window.setInterval(() => {
+      if (cancelled || Date.now() > until || !document.contains(row) || !document.contains(sc)) {
+        window.clearInterval(tick)
+        tick = 0
+        return
+      }
+      const next = desiredTop()
+      // 仅在被贴底大幅拽偏时纠正；小幅偏差交给平滑滚动本身
+      if (Math.abs(sc.scrollTop - next) > 90) {
+        try {
+          sc.scrollTo({ top: next, behavior: 'smooth' })
+        } catch {
+          sc.scrollTop = next
+        }
+      }
+    }, 160)
+  }, animMs)
 
   return () => {
     cancelled = true
-    window.clearInterval(tick)
+    window.clearTimeout(holdDelay)
+    if (tick) window.clearInterval(tick)
   }
 }
 
