@@ -22,13 +22,15 @@ const FULL_LOAD_PAGES = 120
 const RAIL_W = 22
 const TICK_GAP = 8
 const TICK_H = 2
-const EDGE_GAP = 6
-const PANEL_W = 280
+const EDGE_GAP = 2
+const PANEL_W = 210
 const ROW_H = 32
 const VISIBLE_ROWS = 20
 const LIST_H = ROW_H * VISIBLE_ROWS
 const COLLAPSE_MS = 260
 const READ_LINE = 0.38
+const JUMP_PIN_MS = 1000
+const EMOJI = '🤗'
 
 const zh = {
   empty: '暂无提问',
@@ -152,6 +154,7 @@ function QueryJumpPanel({
   const hoverRef = useRef(false)
   const collapseTimer = useRef<number | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
+  const pinUntilRef = useRef(0)
 
   const items = useMemo(() => {
     const fromProj = (projected?.messages ?? []).filter((m) => m.id && !mask.has(String(m.id)))
@@ -199,6 +202,8 @@ function QueryJumpPanel({
   }, [])
 
   const spyActive = useCallback(() => {
+    // 跳转平滑滚动期间锁定选中项，避免 active 在条目间来回跳导致闪烁
+    if (Date.now() < pinUntilRef.current) return
     const sc = document.querySelector(SCROLL_SEL) as HTMLElement | null
     if (!sc || items.length === 0) {
       setActiveIdx(-1)
@@ -219,7 +224,7 @@ function QueryJumpPanel({
         best = idx
       }
     })
-    setActiveIdx(best)
+    setActiveIdx((prev) => (prev === best ? prev : best))
   }, [items])
 
   useEffect(() => {
@@ -320,7 +325,10 @@ function QueryJumpPanel({
     if (busy || !sessionId) return
     setBusy(true)
     try {
-      if (typeof idxInAll === 'number') setActiveIdx(idxInAll)
+      if (typeof idxInAll === 'number') {
+        setActiveIdx(idxInAll)
+        pinUntilRef.current = Date.now() + JUMP_PIN_MS
+      }
       let row = findRowByMsgId(msgId)
       if (!row) {
         let face: any = null
@@ -343,12 +351,6 @@ function QueryJumpPanel({
         return
       }
       row.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      const prev = row.style.outline
-      row.style.outline = '2px solid var(--dsw-alias-brand-primary, #615ced)'
-      window.setTimeout(() => {
-        row!.style.outline = prev
-      }, 1200)
-      window.setTimeout(() => spyActive(), 350)
     } finally {
       setBusy(false)
     }
@@ -379,7 +381,7 @@ function QueryJumpPanel({
         display: 'flex',
         flexDirection: 'row-reverse',
         alignItems: 'stretch',
-        gap: 8,
+        gap: 4,
         pointerEvents: 'auto',
       }}
       onPointerEnter={onEnter}
@@ -473,15 +475,14 @@ function QueryJumpPanel({
                 }}
               >
                 <span
+                  aria-hidden
                   style={{
-                    ...idxStyle,
-                    background: active
-                      ? 'var(--dsw-alias-label-primary, #3d3d3d)'
-                      : 'var(--dsw-alias-bg-layer-2, rgba(0,0,0,.05))',
-                    color: active ? '#fff' : 'var(--dsw-alias-label-secondary, #8a8f98)',
+                    ...emojiStyle,
+                    opacity: active ? 1 : 0.55,
+                    transform: active ? 'scale(1.08)' : 'scale(1)',
                   }}
                 >
-                  {idx + 1}
+                  {EMOJI}
                 </span>
                 <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
                   <span
@@ -543,15 +544,15 @@ const rowStyle: React.CSSProperties = {
   color: 'inherit',
 }
 
-const idxStyle: React.CSSProperties = {
+const emojiStyle: React.CSSProperties = {
   flexShrink: 0,
   width: 18,
   height: 18,
   marginTop: 1,
-  borderRadius: 9,
-  fontSize: 10,
+  fontSize: 13,
   lineHeight: '18px',
   textAlign: 'center',
+  transition: 'opacity .12s, transform .12s',
 }
 
 export function apply(ctx: any) {
