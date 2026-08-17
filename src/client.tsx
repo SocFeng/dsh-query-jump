@@ -39,7 +39,6 @@ const zh = {
   jumpFail: '无法定位该消息',
   enable: '启用',
   markerEmoji: '符号',
-  markerNumber: '序号',
   markerSymbol: '自定义符号',
   disabledHint: '已关闭，点击开启',
 }
@@ -800,18 +799,6 @@ const cfgLabelStyle: React.CSSProperties = {
   color: 'var(--dsw-alias-label-secondary, #8a8f98)',
   cursor: 'pointer',
   userSelect: 'none',
-}
-
-const segBtnStyle: React.CSSProperties = {
-  border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08))',
-  borderRadius: 6,
-  width: 26,
-  height: 22,
-  padding: 0,
-  fontSize: 12,
-  lineHeight: '20px',
-  cursor: 'pointer',
-  color: 'inherit',
 }
 
 const symInputStyle: React.CSSProperties = {
