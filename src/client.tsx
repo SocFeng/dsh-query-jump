@@ -706,48 +706,24 @@ function QueryJumpPanel({
               />
               {t('enable')}
             </label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <input
-                type="text"
-                value={symbolDraft}
-                title={t('markerSymbol')}
-                maxLength={8}
-                onChange={(e) => setSymbolDraft(e.target.value.slice(0, 8))}
-                onFocus={() => void patchConfig({ markerStyle: 'emoji' })}
-                onBlur={() => {
-                  const next = symbolDraft.trim().slice(0, 8) || DEFAULT_SYMBOL
-                  setSymbolDraft(next)
-                  void patchConfig({ markerStyle: 'emoji', markerSymbol: next })
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    ;(e.target as HTMLInputElement).blur()
-                  }
-                }}
-                style={{
-                  ...symInputStyle,
-                  outline:
-                    markerStyle === 'emoji'
-                      ? '1px solid var(--dsw-alias-label-primary, rgba(0,0,0,.25))'
-                      : 'none',
-                }}
-              />
-              <button
-                type="button"
-                title={t('markerNumber')}
-                onClick={() => void patchConfig({ markerStyle: 'number' })}
-                style={{
-                  ...segBtnStyle,
-                  background:
-                    markerStyle === 'number'
-                      ? 'var(--dsw-alias-bg-layer-2, rgba(0,0,0,.06))'
-                      : 'transparent',
-                  fontWeight: markerStyle === 'number' ? 600 : 400,
-                }}
-              >
-                1
-              </button>
-            </div>
+            <input
+              type="text"
+              value={symbolDraft}
+              title={t('markerSymbol')}
+              maxLength={8}
+              onChange={(e) => setSymbolDraft(e.target.value.slice(0, 8))}
+              onBlur={() => {
+                const next = symbolDraft.trim().slice(0, 8) || DEFAULT_SYMBOL
+                setSymbolDraft(next)
+                void patchConfig({ markerStyle: 'emoji', markerSymbol: next })
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  ;(e.target as HTMLInputElement).blur()
+                }
+              }}
+              style={symInputStyle}
+            />
           </div>
         </div>
       )}
