@@ -31,15 +31,16 @@ const COLLAPSE_MS = 260
 const READ_LINE = 0.38
 const JUMP_PIN_MS = 1000
 const SCROLL_HOLD_MS = 2800
-const EMOJI = '🤗'
+const DEFAULT_SYMBOL = '🤗'
 
 const zh = {
   empty: '暂无提问',
   noSession: '请先打开会话',
   jumpFail: '无法定位该消息',
   enable: '启用',
-  markerEmoji: '🤗',
+  markerEmoji: '符号',
   markerNumber: '序号',
+  markerSymbol: '自定义符号',
   disabledHint: '已关闭，点击开启',
 }
 
@@ -225,6 +226,8 @@ function QueryJumpPanel({
 
   const [enable, setEnable] = useState(true)
   const [markerStyle, setMarkerStyle] = useState<MarkerStyle>('emoji')
+  const [markerSymbol, setMarkerSymbol] = useState(DEFAULT_SYMBOL)
+  const [symbolDraft, setSymbolDraft] = useState(DEFAULT_SYMBOL)
   const [mask, setMask] = useState<Set<string>>(() => new Set())
   const [rpcMessages, setRpcMessages] = useState<
     Array<{ seq: number; time: number; text: string; id?: string }>
@@ -353,37 +356,40 @@ function QueryJumpPanel({
     el?.scrollIntoView({ block: 'nearest' })
   }, [open, activeIdx])
 
+  const applyConfigValue = useCallback((value: any) => {
+    if (!value || typeof value !== 'object') return
+    if (typeof value.enable === 'boolean') setEnable(value.enable)
+    if (value.markerStyle === 'number' || value.markerStyle === 'emoji') {
+      setMarkerStyle(value.markerStyle)
+    }
+    if (typeof value.markerSymbol === 'string' && value.markerSymbol.trim()) {
+      const sym = value.markerSymbol.trim().slice(0, 8)
+      setMarkerSymbol(sym)
+      setSymbolDraft(sym)
+    }
+  }, [])
+
   const refreshConfig = useCallback(async () => {
     if (!isLoopback) return
     try {
       const res = await rpc.call(CHANNEL, 'getConfig', {})
-      if (res?.ok) {
-        setEnable(!!res.value.enable)
-        if (res.value.markerStyle === 'number' || res.value.markerStyle === 'emoji') {
-          setMarkerStyle(res.value.markerStyle)
-        }
-      }
+      if (res?.ok) applyConfigValue(res.value)
     } catch {
       /* ignore */
     }
-  }, [rpc, isLoopback])
+  }, [rpc, isLoopback, applyConfigValue])
 
   const patchConfig = useCallback(
-    async (patch: { enable?: boolean; markerStyle?: MarkerStyle }) => {
+    async (patch: { enable?: boolean; markerStyle?: MarkerStyle; markerSymbol?: string }) => {
       if (!isLoopback) return
       try {
         const res = await rpc.call(CHANNEL, 'setConfig', patch)
-        if (res?.ok) {
-          if (typeof res.value.enable === 'boolean') setEnable(res.value.enable)
-          if (res.value.markerStyle === 'number' || res.value.markerStyle === 'emoji') {
-            setMarkerStyle(res.value.markerStyle)
-          }
-        }
+        if (res?.ok) applyConfigValue(res.value)
       } catch {
         /* ignore */
       }
     },
-    [rpc, isLoopback],
+    [rpc, isLoopback, applyConfigValue],
   )
 
   const refreshMask = useCallback(async () => {
@@ -407,16 +413,13 @@ function QueryJumpPanel({
     try {
       const res = await rpc.call(CHANNEL, 'list', { sessionId })
       if (res?.ok) {
-        if (typeof res.value.enable === 'boolean') setEnable(res.value.enable)
-        if (res.value.markerStyle === 'number' || res.value.markerStyle === 'emoji') {
-          setMarkerStyle(res.value.markerStyle)
-        }
+        applyConfigValue(res.value)
         setRpcMessages(res.value.messages ?? [])
       }
     } catch {
       /* ignore */
     }
-  }, [rpc, isLoopback, sessionId])
+  }, [rpc, isLoopback, sessionId, applyConfigValue])
 
   useEffect(() => {
     void refreshConfig()
@@ -501,7 +504,7 @@ function QueryJumpPanel({
           opacity: 0.85,
         }}
       >
-        {EMOJI}
+        {markerSymbol || DEFAULT_SYMBOL}
       </button>
     )
   }
@@ -545,7 +548,7 @@ function QueryJumpPanel({
           transform: active ? 'scale(1.08)' : 'scale(1)',
         }}
       >
-        {EMOJI}
+        {markerSymbol || DEFAULT_SYMBOL}
       </span>
     )
   }
@@ -703,22 +706,32 @@ function QueryJumpPanel({
               />
               {t('enable')}
             </label>
-            <div style={{ display: 'flex', gap: 4 }}>
-              <button
-                type="button"
-                title={t('markerEmoji')}
-                onClick={() => void patchConfig({ markerStyle: 'emoji' })}
-                style={{
-                  ...segBtnStyle,
-                  background:
-                    markerStyle === 'emoji'
-                      ? 'var(--dsw-alias-bg-layer-2, rgba(0,0,0,.06))'
-                      : 'transparent',
-                  fontWeight: markerStyle === 'emoji' ? 600 : 400,
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <input
+                type="text"
+                value={symbolDraft}
+                title={t('markerSymbol')}
+                maxLength={8}
+                onChange={(e) => setSymbolDraft(e.target.value.slice(0, 8))}
+                onFocus={() => void patchConfig({ markerStyle: 'emoji' })}
+                onBlur={() => {
+                  const next = symbolDraft.trim().slice(0, 8) || DEFAULT_SYMBOL
+                  setSymbolDraft(next)
+                  void patchConfig({ markerStyle: 'emoji', markerSymbol: next })
                 }}
-              >
-                {EMOJI}
-              </button>
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    ;(e.target as HTMLInputElement).blur()
+                  }
+                }}
+                style={{
+                  ...symInputStyle,
+                  outline:
+                    markerStyle === 'emoji'
+                      ? '1px solid var(--dsw-alias-label-primary, rgba(0,0,0,.25))'
+                      : 'none',
+                }}
+              />
               <button
                 type="button"
                 title={t('markerNumber')}
@@ -822,6 +835,18 @@ const segBtnStyle: React.CSSProperties = {
   fontSize: 12,
   lineHeight: '20px',
   cursor: 'pointer',
+  color: 'inherit',
+}
+
+const symInputStyle: React.CSSProperties = {
+  width: 36,
+  height: 22,
+  border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08))',
+  borderRadius: 6,
+  padding: '0 4px',
+  fontSize: 13,
+  textAlign: 'center',
+  background: 'var(--dsw-alias-bg-layer-2, #f5f6f8)',
   color: 'inherit',
 }
 

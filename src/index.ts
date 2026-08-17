@@ -19,8 +19,10 @@ export interface Config {
   enable: boolean
   maxQuery: number
   includeSteering: boolean
-  /** 列表前缀：emoji 符号 / number 序号 */
+  /** 列表前缀：symbol 自定义符号 / number 序号 */
   markerStyle: 'emoji' | 'number'
+  /** markerStyle=emoji 时使用的自定义前缀（可任意符号/表情） */
+  markerSymbol: string
 }
 
 const CHANNEL = '/query-jump'
@@ -32,6 +34,7 @@ const DEFAULTS: Config = {
   maxQuery: 200,
   includeSteering: false,
   markerStyle: 'emoji',
+  markerSymbol: '🤗',
 }
 
 const clearMask = new Map<string, Set<string>>()
@@ -43,6 +46,12 @@ function resolveMarkerStyle(raw: unknown): 'emoji' | 'number' {
   return raw === 'number' ? 'number' : 'emoji'
 }
 
+function resolveMarkerSymbol(raw: unknown): string {
+  if (typeof raw !== 'string') return DEFAULTS.markerSymbol
+  const s = raw.trim().slice(0, 8)
+  return s || DEFAULTS.markerSymbol
+}
+
 function resolveConfig(raw: Partial<Config> | undefined): Config {
   return {
     enable: typeof raw?.enable === 'boolean' ? raw.enable : DEFAULTS.enable,
@@ -50,6 +59,7 @@ function resolveConfig(raw: Partial<Config> | undefined): Config {
     includeSteering:
       typeof raw?.includeSteering === 'boolean' ? raw.includeSteering : DEFAULTS.includeSteering,
     markerStyle: resolveMarkerStyle(raw?.markerStyle),
+    markerSymbol: resolveMarkerSymbol(raw?.markerSymbol),
   }
 }
 
@@ -59,7 +69,10 @@ export const Config = Schema.object({
   includeSteering: Schema.boolean().default(DEFAULTS.includeSteering).description('是否纳入 steering 消息'),
   markerStyle: Schema.string()
     .default(DEFAULTS.markerStyle)
-    .description('列表前缀：emoji=🤗 / number=序号'),
+    .description('列表前缀模式：emoji=自定义符号 / number=序号'),
+  markerSymbol: Schema.string()
+    .default(DEFAULTS.markerSymbol)
+    .description('自定义前缀符号（markerStyle=emoji 时生效，最多 8 字符）'),
 })
 
 function ok(value: unknown) {
@@ -232,6 +245,7 @@ export function apply(ctx: any, config?: Partial<Config>) {
             maxQuery: s.maxQuery,
             includeSteering: s.includeSteering,
             markerStyle: s.markerStyle,
+            markerSymbol: s.markerSymbol,
             projectionKey: PROJECTION_KEY,
             settingsNamespace: SETTINGS_NS,
           })
@@ -242,13 +256,20 @@ export function apply(ctx: any, config?: Partial<Config>) {
           const next = { ...s, enable: payload.enable }
           live = next
           await writeSettings(settingsScope, { enable: payload.enable })
-          return ok({ enable: next.enable, markerStyle: next.markerStyle })
+          return ok({
+            enable: next.enable,
+            markerStyle: next.markerStyle,
+            markerSymbol: next.markerSymbol,
+          })
         }
         case 'setConfig': {
           const patch: Partial<Config> = {}
           if (typeof payload?.enable === 'boolean') patch.enable = payload.enable
           if (payload?.markerStyle === 'emoji' || payload?.markerStyle === 'number') {
             patch.markerStyle = payload.markerStyle
+          }
+          if (typeof payload?.markerSymbol === 'string') {
+            patch.markerSymbol = resolveMarkerSymbol(payload.markerSymbol)
           }
           if (typeof payload?.maxQuery === 'number' && payload.maxQuery > 0) {
             patch.maxQuery = payload.maxQuery
@@ -257,7 +278,9 @@ export function apply(ctx: any, config?: Partial<Config>) {
             patch.includeSteering = payload.includeSteering
           }
           if (Object.keys(patch).length === 0) {
-            return badRequest('setConfig requires enable | markerStyle | maxQuery | includeSteering')
+            return badRequest(
+              'setConfig requires enable | markerStyle | markerSymbol | maxQuery | includeSteering',
+            )
           }
           const s = readFromScope(settingsScope, live)
           const next = resolveConfig({ ...s, ...patch })
@@ -266,6 +289,7 @@ export function apply(ctx: any, config?: Partial<Config>) {
           return ok({
             enable: next.enable,
             markerStyle: next.markerStyle,
+            markerSymbol: next.markerSymbol,
             maxQuery: next.maxQuery,
             includeSteering: next.includeSteering,
           })
@@ -285,6 +309,7 @@ export function apply(ctx: any, config?: Partial<Config>) {
             sessionId,
             enable: s.enable,
             markerStyle: s.markerStyle,
+            markerSymbol: s.markerSymbol,
             messages,
           })
         }

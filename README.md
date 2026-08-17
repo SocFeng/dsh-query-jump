@@ -180,12 +180,13 @@ dsh --profile web --dump-config
 
 ## 配置项（设置 / 面板底栏 / Config）
 
-悬停列表**底部**可改「启用」与前缀（🤗 / 序号）；同时写入 settings（若 Web「插件配置」白名单放行也会出现）。
+悬停列表**底部**可改「启用」、自定义前缀符号，以及切到序号模式；同时写入 settings（若 Web「插件配置」白名单放行也会出现）。
 
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `enable` | `boolean` | `true` | 总开关；关闭后只留重开入口 |
-| `markerStyle` | `'emoji' \| 'number'` | `'emoji'` | 列表前缀：🤗 或序号 |
+| `markerStyle` | `'emoji' \| 'number'` | `'emoji'` | 前缀模式：自定义符号 / 序号 |
+| `markerSymbol` | `string` | `'🤗'` | 自定义前缀（最多 8 字符；符号模式下生效） |
 | `maxQuery` | `number` | `200` | 单会话最多保留条数 |
 | `includeSteering` | `boolean` | `false` | 是否纳入 steering |
 
@@ -197,6 +198,7 @@ dsh --profile web --dump-config
     config:
       enable: true
       markerStyle: emoji
+      markerSymbol: "🤗"
       maxQuery: 200
 ```
 
