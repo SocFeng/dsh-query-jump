@@ -30,6 +30,7 @@ const LIST_H = ROW_H * VISIBLE_ROWS
 const COLLAPSE_MS = 260
 const READ_LINE = 0.38
 const JUMP_PIN_MS = 1000
+const SCROLL_HOLD_MS = 2800
 const EMOJI = '🤗'
 
 const zh = {
@@ -109,6 +110,68 @@ async function loadUntilIdLoaded(face: any, id: string) {
   }
 }
 
+/** 滚到目标行；回答流式贴底时持续短暂压制，避免立刻被拽回底部 */
+function scrollRowIntoConversation(row: HTMLElement, holdMs = SCROLL_HOLD_MS): () => void {
+  const sc = document.querySelector(SCROLL_SEL) as HTMLElement | null
+  if (!sc) {
+    try {
+      row.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+    } catch {
+      row.scrollIntoView(true)
+    }
+    return () => {}
+  }
+
+  const desiredTop = () => {
+    const srect = sc.getBoundingClientRect()
+    const rrect = row.getBoundingClientRect()
+    const pad = Math.min(160, Math.max(72, Math.round(srect.height * READ_LINE)))
+    return Math.max(0, sc.scrollTop + (rrect.top - srect.top) - pad)
+  }
+
+  // 先发一次向上滚轮，打断宿主「贴底跟随」
+  try {
+    sc.dispatchEvent(
+      new WheelEvent('wheel', { deltaY: -40, bubbles: true, cancelable: true }),
+    )
+  } catch {
+    /* ignore */
+  }
+
+  let target = desiredTop()
+  const before = sc.scrollTop
+  try {
+    sc.scrollTo({ top: target, behavior: 'smooth' })
+  } catch {
+    sc.scrollTop = target
+  }
+
+  const until = Date.now() + holdMs
+  let cancelled = false
+  const tick = window.setInterval(() => {
+    if (cancelled || Date.now() > until || !document.contains(row) || !document.contains(sc)) {
+      window.clearInterval(tick)
+      return
+    }
+    target = desiredTop()
+    if (Math.abs(sc.scrollTop - target) > 36) {
+      sc.scrollTop = target
+    }
+  }, 80)
+
+  window.setTimeout(() => {
+    if (cancelled || !document.contains(sc)) return
+    if (Math.abs(sc.scrollTop - before) < 4) {
+      sc.scrollTop = desiredTop()
+    }
+  }, 220)
+
+  return () => {
+    cancelled = true
+    window.clearInterval(tick)
+  }
+}
+
 function formatTime(ts: number): string {
   try {
     const d = new Date(ts)
@@ -148,13 +211,14 @@ function QueryJumpPanel({
   const [geo, setGeo] = useState<DockGeo | null>(null)
   const [open, setOpen] = useState(false)
   const [activeIdx, setActiveIdx] = useState(-1)
-  const [busy, setBusy] = useState(false)
   const [railScroll, setRailScroll] = useState(0)
 
   const hoverRef = useRef(false)
   const collapseTimer = useRef<number | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
   const pinUntilRef = useRef(0)
+  const jumpGenRef = useRef(0)
+  const releaseHoldRef = useRef<(() => void) | null>(null)
 
   const items = useMemo(() => {
     const fromProj = (projected?.messages ?? []).filter((m) => m.id && !mask.has(String(m.id)))
@@ -183,7 +247,7 @@ function QueryJumpPanel({
   }
 
   const onLeave = () => {
-    if (busy || Date.now() < pinUntilRef.current) return
+    if (Date.now() < pinUntilRef.current) return
     hoverRef.current = false
     clearCollapse()
     collapseTimer.current = window.setTimeout(() => {
@@ -257,6 +321,8 @@ function QueryJumpPanel({
       ro?.disconnect()
       window.clearInterval(tick)
       clearCollapse()
+      releaseHoldRef.current?.()
+      releaseHoldRef.current = null
     }
   }, [refreshGeo, spyActive])
 
@@ -323,12 +389,14 @@ function QueryJumpPanel({
   }, [refreshList, sessionId, isLoopback])
 
   const onJump = async (msgId: string, idxInAll?: number) => {
-    if (busy || !sessionId) return
-    setBusy(true)
+    if (!sessionId) return
+    const gen = ++jumpGenRef.current
+    releaseHoldRef.current?.()
+    releaseHoldRef.current = null
     try {
       if (typeof idxInAll === 'number') {
         setActiveIdx(idxInAll)
-        pinUntilRef.current = Date.now() + JUMP_PIN_MS
+        pinUntilRef.current = Date.now() + Math.max(JUMP_PIN_MS, SCROLL_HOLD_MS)
       }
       let row = findRowByMsgId(msgId)
       if (!row) {
@@ -340,6 +408,7 @@ function QueryJumpPanel({
         }
         if (face) {
           await loadUntilIdLoaded(face, msgId)
+          if (gen !== jumpGenRef.current) return
           let tries = 0
           while (tries++ < 20 && !row) {
             row = findRowByMsgId(msgId)
@@ -347,13 +416,14 @@ function QueryJumpPanel({
           }
         }
       }
+      if (gen !== jumpGenRef.current) return
       if (!row) {
         console.warn(`[dsh-query-jump] ${t('jumpFail')}`, msgId)
         return
       }
-      row.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    } finally {
-      setBusy(false)
+      releaseHoldRef.current = scrollRowIntoConversation(row)
+    } catch (err) {
+      console.warn('[dsh-query-jump] jump error', err)
     }
   }
 
@@ -541,11 +611,12 @@ const rowStyle: React.CSSProperties = {
   gap: 8,
   minHeight: ROW_H,
   padding: '5px 8px',
-  marginBottom: 1,
+  marginBottom: 2,
   border: 'none',
-  borderRadius: 6,
+  borderRadius: 8,
   cursor: 'pointer',
   color: 'inherit',
+  transition: 'box-shadow .15s ease, transform .15s ease, background .15s ease',
 }
 
 const emojiStyle: React.CSSProperties = {
