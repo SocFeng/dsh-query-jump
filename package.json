@@ -32,6 +32,9 @@
       "platform": "web"
     }
   },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
   "peerDependencies": {
     "react": "^18.2.0"
   },

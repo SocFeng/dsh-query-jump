@@ -22,9 +22,10 @@ await build({
   platform: 'node',
   format: 'esm',
   target: 'node20',
+  // Resolves from the DSH profile / host at runtime
+  external: ['@deepseek-ai/schemastery'],
   logLevel: 'info',
 })
-
 const banner = [
   'window.__ModuleLoader__.load({',
   `  id: ${JSON.stringify(id)},`,

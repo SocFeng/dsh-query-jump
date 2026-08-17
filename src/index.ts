@@ -6,6 +6,7 @@
  * - Loopback RPC `/query-jump` for getConfig / setEnable / mask clear.
  */
 
+import Schema from '@deepseek-ai/schemastery'
 import {
   applyProjectionEvent,
   type QueryJumpState,
@@ -45,20 +46,12 @@ function resolveConfig(raw: Partial<Config> | undefined): Config {
   }
 }
 
-/**
- * Minimal Standard-Schema-compatible Config for Cordis loaders that expect it.
- * Avoids a hard dependency on @deepseek-ai/schemastery at publish time.
- */
-export const Config = {
-  '~standard': {
-    version: 1 as const,
-    vendor: 'dsh-query-jump',
-    validate(value: unknown) {
-      const raw = value && typeof value === 'object' ? (value as Partial<Config>) : {}
-      return { value: resolveConfig(raw) }
-    },
-  },
-}
+/** Cordis / settings 都要求 Schemastery 可调用 schema（不能是普通对象）。 */
+export const Config = Schema.object({
+  enable: Schema.boolean().default(DEFAULTS.enable),
+  maxQuery: Schema.number().default(DEFAULTS.maxQuery),
+  includeSteering: Schema.boolean().default(DEFAULTS.includeSteering),
+})
 
 function ok(value: unknown) {
   return { ok: true as const, value }
@@ -84,38 +77,29 @@ function internalError(error: unknown) {
 
 type SettingsScope = {
   get?: () => Partial<Config>
-  value?: Partial<Config> | (() => Partial<Config>)
-  update?: (next: Partial<Config>) => void | Promise<void>
-  replace?: (next: Partial<Config>) => void | Promise<void>
-  set?: (next: Partial<Config>) => void | Promise<void>
+  update?: (patch: Partial<Config>) => void | Promise<void>
+  replace?: (section: Partial<Config>) => void | Promise<void>
 }
 
 function readFromScope(scope: SettingsScope | null, fallback: Config): Config {
   if (!scope) return fallback
   try {
     if (typeof scope.get === 'function') return resolveConfig({ ...fallback, ...scope.get() })
-    if (typeof scope.value === 'function') return resolveConfig({ ...fallback, ...scope.value() })
-    if (scope.value && typeof scope.value === 'object') {
-      return resolveConfig({ ...fallback, ...scope.value })
-    }
   } catch (err) {
     console.warn('[dsh-query-jump] settings read failed', err)
   }
   return fallback
 }
 
-async function writeEnable(scope: SettingsScope | null, next: Config): Promise<void> {
+async function writeEnable(scope: SettingsScope | null, enable: boolean): Promise<void> {
   if (!scope) return
   if (typeof scope.update === 'function') {
-    await scope.update(next)
+    await scope.update({ enable })
     return
   }
   if (typeof scope.replace === 'function') {
-    await scope.replace(next)
-    return
-  }
-  if (typeof scope.set === 'function') {
-    await scope.set(next)
+    const cur = readFromScope(scope, { ...DEFAULTS, enable })
+    await scope.replace({ ...cur, enable })
   }
 }
 
@@ -135,16 +119,12 @@ export function apply(ctx: any, config?: Partial<Config>) {
   let live = resolveConfig(config)
   let settingsScope: SettingsScope | null = null
 
-  // Optional settings (Web settings page may still hide the namespace).
+  // Optional settings（必须传 Schemastery schema；Web 设置页白名单另论）
   if (typeof ctx.inject === 'function') {
     try {
       ctx.inject(['settings'], (sctx: any) => {
         try {
-          const schema = {
-            parse: (v: unknown) => resolveConfig(v as Partial<Config>),
-            '~standard': Config['~standard'],
-          }
-          settingsScope = sctx.settings.register(SETTINGS_NS, schema, {
+          settingsScope = sctx.settings.register(SETTINGS_NS, Config, {
             base: { ...live },
             applies: 'live',
           })
@@ -205,7 +185,7 @@ export function apply(ctx: any, config?: Partial<Config>) {
           const s = readFromScope(settingsScope, live)
           const next = { ...s, enable: payload.enable }
           live = next
-          await writeEnable(settingsScope, next)
+          await writeEnable(settingsScope, payload.enable)
           return ok({ enable: next.enable })
         }
         case 'list': {
@@ -231,8 +211,6 @@ export function apply(ctx: any, config?: Partial<Config>) {
           }
           const ids = Array.isArray(payload?.msgIds) ? payload.msgIds.map(String) : []
           clearMask.set(sessionId, new Set(ids))
-          // Also clear incremental entries for this session when client sends all ids
-          // (mask alone hides projection; incremental list respects mask in `list`).
           return ok({ sessionId, masked: ids.length })
         }
         case 'getMask': {
