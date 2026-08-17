@@ -183,10 +183,11 @@ function QueryJumpPanel({
   }
 
   const onLeave = () => {
+    if (busy || Date.now() < pinUntilRef.current) return
     hoverRef.current = false
     clearCollapse()
     collapseTimer.current = window.setTimeout(() => {
-      if (!hoverRef.current) setOpen(false)
+      if (!hoverRef.current && Date.now() >= pinUntilRef.current) setOpen(false)
     }, COLLAPSE_MS)
   }
 
@@ -467,11 +468,14 @@ function QueryJumpPanel({
                 style={{
                   ...rowStyle,
                   background: active
-                    ? 'var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.06))'
+                    ? 'var(--dsw-alias-bg-layer-3, #fff)'
                     : 'transparent',
                   boxShadow: active
-                    ? 'inset 2px 0 0 var(--dsw-alias-label-primary, #3d3d3d)'
+                    ? '0 4px 14px rgba(15,23,42,.12), 0 1px 3px rgba(15,23,42,.06)'
                     : 'none',
+                  transform: active ? 'translateY(-1px)' : 'none',
+                  zIndex: active ? 1 : 0,
+                  position: 'relative',
                 }}
               >
                 <span
