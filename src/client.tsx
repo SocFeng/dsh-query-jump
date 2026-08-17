@@ -37,10 +37,16 @@ const zh = {
   empty: '暂无提问',
   noSession: '请先打开会话',
   jumpFail: '无法定位该消息',
-  enable: '启用',
-  markerEmoji: '符号',
-  markerSymbol: '自定义符号',
-  disabledHint: '已关闭，点击开启',
+  settingsTab: 'Query 定位',
+  settingsTitle: '会话 Query 定位',
+  settingsDesc: '右侧提问导航的开关与列表前缀。',
+  enable: '启用面板',
+  markerMode: '列表前缀',
+  markerEmoji: '自定义符号',
+  markerNumber: '序号',
+  markerSymbol: '符号内容',
+  markerSymbolHint: '任意文字或表情，最多 8 个字符',
+  saved: '已保存',
 }
 
 type MarkerStyle = 'emoji' | 'number'
@@ -226,7 +232,6 @@ function QueryJumpPanel({
   const [enable, setEnable] = useState(true)
   const [markerStyle, setMarkerStyle] = useState<MarkerStyle>('emoji')
   const [markerSymbol, setMarkerSymbol] = useState(DEFAULT_SYMBOL)
-  const [symbolDraft, setSymbolDraft] = useState(DEFAULT_SYMBOL)
   const [mask, setMask] = useState<Set<string>>(() => new Set())
   const [rpcMessages, setRpcMessages] = useState<
     Array<{ seq: number; time: number; text: string; id?: string }>
@@ -364,7 +369,6 @@ function QueryJumpPanel({
     if (typeof value.markerSymbol === 'string' && value.markerSymbol.trim()) {
       const sym = value.markerSymbol.trim().slice(0, 8)
       setMarkerSymbol(sym)
-      setSymbolDraft(sym)
     }
   }, [])
 
@@ -377,19 +381,6 @@ function QueryJumpPanel({
       /* ignore */
     }
   }, [rpc, isLoopback, applyConfigValue])
-
-  const patchConfig = useCallback(
-    async (patch: { enable?: boolean; markerStyle?: MarkerStyle; markerSymbol?: string }) => {
-      if (!isLoopback) return
-      try {
-        const res = await rpc.call(CHANNEL, 'setConfig', patch)
-        if (res?.ok) applyConfigValue(res.value)
-      } catch {
-        /* ignore */
-      }
-    },
-    [rpc, isLoopback, applyConfigValue],
-  )
 
   const refreshMask = useCallback(async () => {
     if (!isLoopback || !sessionId) {
@@ -476,39 +467,7 @@ function QueryJumpPanel({
     }
   }
 
-  if (!isLoopback || !geo) return null
-
-  // 关闭时仍露出入口，方便从面板重新开启
-  if (!enable) {
-    return (
-      <button
-        type="button"
-        title={t('disabledHint')}
-        onClick={() => void patchConfig({ enable: true })}
-        style={{
-          position: 'fixed',
-          zIndex: 45,
-          right: geo.right,
-          top: geo.top + Math.max(0, geo.railH / 2 - 14),
-          width: 28,
-          height: 28,
-          borderRadius: 8,
-          border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))',
-          background: 'var(--dsw-alias-bg-layer-3, #fff)',
-          boxShadow: '0 4px 12px rgba(15,23,42,.1)',
-          cursor: 'pointer',
-          fontSize: 14,
-          lineHeight: '26px',
-          padding: 0,
-          opacity: 0.85,
-        }}
-      >
-        {markerSymbol || DEFAULT_SYMBOL}
-      </button>
-    )
-  }
-
-  if (items.length === 0) return null
+  if (!enable || !isLoopback || !geo || items.length === 0) return null
 
   const { right, top, railH } = geo
   const contentH = Math.max(railH, (items.length - 1) * TICK_GAP + TICK_H + 8)
@@ -622,108 +581,68 @@ function QueryJumpPanel({
 
       {open && (
         <div
+          ref={listRef}
           style={{
             width: PANEL_W,
-            maxHeight: Math.min(railH, LIST_H + 40),
-            display: 'flex',
-            flexDirection: 'column',
+            maxHeight: Math.min(railH, LIST_H),
+            overflow: 'auto',
+            padding: '6px 4px',
             background: 'var(--dsw-alias-bg-layer-3, #fff)',
             border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08))',
             borderRadius: 10,
             boxShadow: '0 8px 24px rgba(15,23,42,.1)',
             animation: 'qjIn .14s ease-out',
-            overflow: 'hidden',
           }}
         >
-          <div
-            ref={listRef}
-            style={{
-              flex: 1,
-              overflow: 'auto',
-              maxHeight: LIST_H,
-              padding: '6px 4px 4px',
-            }}
-          >
-            {!sessionId && <div style={emptyStyle}>{t('noSession')}</div>}
-            {sessionId && items.length === 0 && <div style={emptyStyle}>{t('empty')}</div>}
-            {items.map((item, idx) => {
-              const active = idx === activeIdx
-              return (
-                <button
-                  key={item.msgId}
-                  type="button"
-                  data-qj-idx={idx}
-                  title={item.query}
-                  onClick={() => void onJump(item.msgId, idx)}
-                  style={{
-                    ...rowStyle,
-                    background: active ? 'var(--dsw-alias-bg-layer-3, #fff)' : 'transparent',
-                    boxShadow: active
-                      ? '0 4px 14px rgba(15,23,42,.12), 0 1px 3px rgba(15,23,42,.06)'
-                      : 'none',
-                    transform: active ? 'translateY(-1px)' : 'none',
-                    zIndex: active ? 1 : 0,
-                    position: 'relative',
-                  }}
-                >
-                  {markerOf(idx, active)}
-                  <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
-                    <span
-                      style={{
-                        display: 'block',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        fontSize: 12.5,
-                        lineHeight: 1.3,
-                        fontWeight: active ? 600 : 400,
-                      }}
-                    >
-                      {item.query}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: 11,
-                        color: 'var(--dsw-alias-label-secondary, #8a8f98)',
-                      }}
-                    >
-                      {formatTime(item.createAt)}
-                    </span>
+          {!sessionId && <div style={emptyStyle}>{t('noSession')}</div>}
+          {sessionId && items.length === 0 && <div style={emptyStyle}>{t('empty')}</div>}
+          {items.map((item, idx) => {
+            const active = idx === activeIdx
+            return (
+              <button
+                key={item.msgId}
+                type="button"
+                data-qj-idx={idx}
+                title={item.query}
+                onClick={() => void onJump(item.msgId, idx)}
+                style={{
+                  ...rowStyle,
+                  background: active ? 'var(--dsw-alias-bg-layer-3, #fff)' : 'transparent',
+                  boxShadow: active
+                    ? '0 4px 14px rgba(15,23,42,.12), 0 1px 3px rgba(15,23,42,.06)'
+                    : 'none',
+                  transform: active ? 'translateY(-1px)' : 'none',
+                  zIndex: active ? 1 : 0,
+                  position: 'relative',
+                }}
+              >
+                {markerOf(idx, active)}
+                <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+                  <span
+                    style={{
+                      display: 'block',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      fontSize: 12.5,
+                      lineHeight: 1.3,
+                      fontWeight: active ? 600 : 400,
+                    }}
+                  >
+                    {item.query}
                   </span>
-                </button>
-              )
-            })}
-          </div>
-
-          <div style={cfgBarStyle}>
-            <label style={cfgLabelStyle}>
-              <input
-                type="checkbox"
-                checked={enable}
-                onChange={(e) => void patchConfig({ enable: e.target.checked })}
-                style={{ margin: 0 }}
-              />
-              {t('enable')}
-            </label>
-            <input
-              type="text"
-              value={symbolDraft}
-              title={t('markerSymbol')}
-              maxLength={8}
-              onChange={(e) => setSymbolDraft(e.target.value.slice(0, 8))}
-              onBlur={() => {
-                const next = symbolDraft.trim().slice(0, 8) || DEFAULT_SYMBOL
-                setSymbolDraft(next)
-                void patchConfig({ markerStyle: 'emoji', markerSymbol: next })
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  ;(e.target as HTMLInputElement).blur()
-                }
-              }}
-              style={symInputStyle}
-            />
-          </div>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: 'var(--dsw-alias-label-secondary, #8a8f98)',
+                    }}
+                  >
+                    {formatTime(item.createAt)}
+                  </span>
+                </span>
+              </button>
+            )
+          })}
         </div>
       )}
 
@@ -781,36 +700,151 @@ const numStyle: React.CSSProperties = {
   textAlign: 'center',
 }
 
-const cfgBarStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 8,
-  padding: '6px 8px',
-  borderTop: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.06))',
-  flexShrink: 0,
-}
+/** 设置 → 插件 →「Query 定位」页（走本插件 RPC，不依赖 Web 白名单） */
+function QueryJumpSettingsTab({
+  rpc,
+  t,
+  isLoopback,
+}: {
+  rpc: Rpc
+  t: (k: string) => string
+  isLoopback: boolean
+}) {
+  const [enable, setEnable] = useState(true)
+  const [markerStyle, setMarkerStyle] = useState<MarkerStyle>('emoji')
+  const [markerSymbol, setMarkerSymbol] = useState(DEFAULT_SYMBOL)
+  const [hint, setHint] = useState('')
 
-const cfgLabelStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  fontSize: 11,
-  color: 'var(--dsw-alias-label-secondary, #8a8f98)',
-  cursor: 'pointer',
-  userSelect: 'none',
-}
+  const load = useCallback(async () => {
+    if (!isLoopback) return
+    try {
+      const res = await rpc.call(CHANNEL, 'getConfig', {})
+      if (!res?.ok) return
+      setEnable(!!res.value.enable)
+      if (res.value.markerStyle === 'number' || res.value.markerStyle === 'emoji') {
+        setMarkerStyle(res.value.markerStyle)
+      }
+      if (typeof res.value.markerSymbol === 'string' && res.value.markerSymbol.trim()) {
+        setMarkerSymbol(res.value.markerSymbol.trim().slice(0, 8))
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [rpc, isLoopback])
 
-const symInputStyle: React.CSSProperties = {
-  width: 36,
-  height: 22,
-  border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08))',
-  borderRadius: 6,
-  padding: '0 4px',
-  fontSize: 13,
-  textAlign: 'center',
-  background: 'var(--dsw-alias-bg-layer-2, #f5f6f8)',
-  color: 'inherit',
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const save = useCallback(
+    async (patch: { enable?: boolean; markerStyle?: MarkerStyle; markerSymbol?: string }) => {
+      if (!isLoopback) return
+      try {
+        const res = await rpc.call(CHANNEL, 'setConfig', patch)
+        if (!res?.ok) return
+        if (typeof res.value.enable === 'boolean') setEnable(res.value.enable)
+        if (res.value.markerStyle === 'number' || res.value.markerStyle === 'emoji') {
+          setMarkerStyle(res.value.markerStyle)
+        }
+        if (typeof res.value.markerSymbol === 'string' && res.value.markerSymbol.trim()) {
+          setMarkerSymbol(res.value.markerSymbol.trim().slice(0, 8))
+        }
+        setHint(t('saved'))
+        window.setTimeout(() => setHint(''), 1200)
+      } catch {
+        /* ignore */
+      }
+    },
+    [rpc, isLoopback, t],
+  )
+
+  const row: React.CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    marginBottom: 16,
+  }
+  const label: React.CSSProperties = {
+    fontSize: 13,
+    fontWeight: 600,
+    color: 'var(--dsw-alias-label-primary, inherit)',
+  }
+  const hintStyle: React.CSSProperties = {
+    fontSize: 12,
+    color: 'var(--dsw-alias-label-secondary, #8a8f98)',
+  }
+
+  return (
+    <div style={{ padding: '8px 4px 24px', maxWidth: 420 }}>
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 16, fontWeight: 650, marginBottom: 4 }}>{t('settingsTitle')}</div>
+        <div style={hintStyle}>{t('settingsDesc')}</div>
+      </div>
+
+      <div style={row}>
+        <label style={{ ...label, display: 'flex', alignItems: 'center', gap: 8, fontWeight: 500 }}>
+          <input
+            type="checkbox"
+            checked={enable}
+            onChange={(e) => void save({ enable: e.target.checked })}
+          />
+          {t('enable')}
+        </label>
+      </div>
+
+      <div style={row}>
+        <div style={label}>{t('markerMode')}</div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+          <input
+            type="radio"
+            name="qj-marker"
+            checked={markerStyle === 'emoji'}
+            onChange={() => void save({ markerStyle: 'emoji' })}
+          />
+          {t('markerEmoji')}
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+          <input
+            type="radio"
+            name="qj-marker"
+            checked={markerStyle === 'number'}
+            onChange={() => void save({ markerStyle: 'number' })}
+          />
+          {t('markerNumber')}
+        </label>
+      </div>
+
+      <div style={{ ...row, opacity: markerStyle === 'emoji' ? 1 : 0.45 }}>
+        <div style={label}>{t('markerSymbol')}</div>
+        <div style={hintStyle}>{t('markerSymbolHint')}</div>
+        <input
+          type="text"
+          value={markerSymbol}
+          maxLength={8}
+          disabled={markerStyle !== 'emoji'}
+          onChange={(e) => setMarkerSymbol(e.target.value.slice(0, 8))}
+          onBlur={() => {
+            const next = markerSymbol.trim().slice(0, 8) || DEFAULT_SYMBOL
+            setMarkerSymbol(next)
+            void save({ markerStyle: 'emoji', markerSymbol: next })
+          }}
+          style={{
+            width: 120,
+            height: 32,
+            borderRadius: 8,
+            border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.12))',
+            padding: '0 10px',
+            fontSize: 16,
+            textAlign: 'center',
+            background: 'var(--dsw-alias-bg-layer-2, #f5f6f8)',
+            color: 'inherit',
+          }}
+        />
+      </div>
+
+      {hint ? <div style={{ ...hintStyle, color: 'var(--dsw-alias-label-primary, #3d3d3d)' }}>{hint}</div> : null}
+    </div>
+  )
 }
 
 export function apply(ctx: any) {
@@ -843,4 +877,21 @@ export function apply(ctx: any) {
         }),
     ),
   )
+
+  // 设置 → 插件 → 独立 Tab（不走 WEB_SETTINGS_NAMESPACES 白名单）
+  try {
+    ctx.slots.inject('settings.plugins.tab', () =>
+      ctx.slots.register(
+        {
+          name: 'settings.plugins.tab',
+          id: 'query-jump',
+          order: 40,
+          label: () => t('settingsTab'),
+        },
+        () => React.createElement(QueryJumpSettingsTab, { rpc, t, isLoopback }),
+      ),
+    )
+  } catch (err) {
+    console.warn('[dsh-query-jump] settings.plugins.tab register skipped', err)
+  }
 }

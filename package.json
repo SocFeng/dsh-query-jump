@@ -1,6 +1,6 @@
 {
   "name": "dsh-query-jump",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "DSH WebUI：会话用户 Query 列表定位跳转（shell.overlay + 会话投影 + loadOlder）",
   "license": "MIT",
   "type": "module",

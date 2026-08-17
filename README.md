@@ -79,7 +79,7 @@ DSH 自带 **Trajectory（轨迹）** 能看完整事件流，但对「找回某
          点击右侧条目 → 左侧对话平滑滚到对应消息
 ```
 
-关闭总开关后，面板收成一条窄条，勾选即可重新启用（不依赖 Web 设置白名单）。
+关闭总开关后，右侧导航隐藏；到 **设置 → 插件 → Query 定位** 可重新开启。
 
 ---
 
@@ -178,17 +178,19 @@ dsh --profile web --dump-config
 
 ---
 
-## 配置项（设置 / 面板底栏 / Config）
+## 配置项（设置 → 插件 → Query 定位）
 
-悬停列表**底部**可改「启用」、自定义前缀符号，以及切到序号模式；同时写入 settings（若 Web「插件配置」白名单放行也会出现）。
+打开 **设置 → 插件**，切到 **「Query 定位」** 标签页即可配置（不依赖「插件配置」白名单）：
 
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `enable` | `boolean` | `true` | 总开关；关闭后只留重开入口 |
+| `enable` | `boolean` | `true` | 总开关；关闭后不显示右侧导航 |
 | `markerStyle` | `'emoji' \| 'number'` | `'emoji'` | 前缀模式：自定义符号 / 序号 |
 | `markerSymbol` | `string` | `'🤗'` | 自定义前缀（最多 8 字符；符号模式下生效） |
 | `maxQuery` | `number` | `200` | 单会话最多保留条数 |
 | `includeSteering` | `boolean` | `false` | 是否纳入 steering |
+
+也可在 profile / `settings.yaml` 中写同名字段：
 
 ```yaml
 # cordis.patch.yml / profile 配置
@@ -202,8 +204,8 @@ dsh --profile web --dump-config
       maxQuery: 200
 ```
 
-Host 会 `settings.register('dsh-query-jump')` 并尝试 `expose: true`。  
-若本机 DSH 的 Web「设置→插件配置」仍有白名单限制，卡片可能暂不出现——**用面板底栏或上面的 config 即可**。
+Host 仍会 `settings.register('dsh-query-jump')` 并尝试 `expose: true`。  
+若本机 DSH 白名单已放行，也可能出现在「插件配置」折叠卡片里；**日常请用「Query 定位」标签页**。
 
 ### 定位数据会丢吗？
 
