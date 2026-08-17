@@ -1,0 +1,7 @@
+- insert:
+  - id: query-jump
+    name: dsh-query-jump
+    config:
+      enable: true
+      maxQuery: 200
+      includeSteering: false

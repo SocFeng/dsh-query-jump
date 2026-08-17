@@ -1,0 +1,10 @@
+node_modules/
+*.log
+.DS_Store
+dist/
+.idea/
+.vscode/
+*.tsbuildinfo
+
+# 本地设计文档，不上传到 GitHub
+fh/
