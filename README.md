@@ -1,298 +1,168 @@
 # dsh-query-jump
 
-**DeepSeek Harness（DSH）会话 Query 定位插件**
-
-在 WebUI 右侧提供常驻「用户提问」导航面板：只看真人 Query，一点即平滑跳回聊天位置并短暂高亮。不改 DSH 内核，可插拔安装。
+<p align="center">
+  <strong>DSH WebUI · 会话提问导航</strong><br/>
+  <sub>长对话里找回那句「我之前问过什么」 (｡･∀･)ﾉﾞ</sub>
+</p>
 
 <p align="center">
-  <img alt="license" src="https://img.shields.io/badge/license-MIT-blue.svg" />
-  <img alt="node" src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" />
-  <img alt="platform" src="https://img.shields.io/badge/platform-DSH%20Web-111827.svg" />
-  <img alt="stack" src="https://img.shields.io/badge/Cordis-plugin-8250df.svg" />
+  <img alt="version" src="https://img.shields.io/badge/version-0.2.0-4f46e5?style=flat-square" />
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" />
+  <img alt="node" src="https://img.shields.io/badge/node-%3E%3D20-22c55e?style=flat-square" />
+  <img alt="platform" src="https://img.shields.io/badge/DSH-WebUI-111827?style=flat-square" />
 </p>
 
 ---
 
-## 目录
+## 这是什么
 
-- [为什么做这个插件](#为什么做这个插件)
-- [功能一览](#功能一览)
-- [效果示意](#效果示意)
-- [架构概览](#架构概览)
-- [快速开始](#快速开始)
-- [使用说明](#使用说明)
-- [配置项](#配置项)
-- [项目结构](#项目结构)
-- [开发与测试](#开发与测试)
-- [与 Trajectory / 社区导航的对比](#与-trajectory--社区导航的对比)
-- [边界与已知限制](#边界与已知限制)
-- [设计文档](#设计文档)
-- [许可证](#许可证)
+给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) WebUI 用的**提问定位插件**。
+
+对话区右缘有一排淡淡的短横线；悬停展开提问列表，点一下就能平滑跳回对应气泡。  
+只收集**真实用户提问**，不掺模型回复和工具噪音。
+
+> 适合长会话里快速翻找历史问题 ✧(｡•̀ᴗ-)✧
+
+**当前版本：`0.2.0`**
 
 ---
 
-## 为什么做这个插件
+## 能做什么
 
-DSH 自带 **Trajectory（轨迹）** 能看完整事件流，但对「找回某次自己问过什么」并不友好：
-
-| 痛点 | Trajectory | 本插件 |
-| --- | --- | --- |
-| 事件噪音 | 用户 / 模型 / 工具 / system 混在一起 | **只保留真实用户提问** |
-| 跳转聊天 | 独立 Tab，**不能点回对话 DOM** | 点击列表 → **平滑滚动 + 高亮** |
-| 入口成本 | 需要切换视图 | 右侧浮层，**对话页常驻** |
-
-灵感来自通义千问等产品的会话导航：长对话里用「提问目录」快速定位，而不是在 Trajectory 里翻全量日志。
+| | 功能 | 说明 |
+| :---: | --- | --- |
+| ✦ | 提问列表 | 只显示你发过的 Query，带日期时间 |
+| ✦ | 一键跳转 | 点击条目 → 平滑滚到聊天位置 |
+| ✦ | 当前位置 | 阅读中的那条会浮起高亮 |
+| ✦ | 短横线轨 | 平时低调贴在对话右缘，不抢视线 |
+| ✦ | 自定义前缀 | 🤗 / ★ / 序号… 随你定 |
+| ✦ | 设置页配置 | `设置 → 插件 → Query 定位` |
+| ✦ | 数据持久 | 重启 / 更新插件，列表一般还在 |
 
 ---
 
-## 功能一览
+## 怎么用
 
-| 能力 | 说明 |
+### ① 安装
+
+```bash
+# GitHub（推荐）
+dsh plugin --profile web remove dsh-query-jump
+dsh plugin --profile web add github:SocFeng/dsh-query-jump
+
+# 或本地开发
+cd dsh-query-jump
+npm install && npm run build
+dsh plugin --profile web add link:.
+```
+
+然后**重启** `dsh web`，浏览器**硬刷新**。
+
+> peer 依赖那一串 `WARN` 可以忽略，不影响使用 (￣▽￣)
+
+### ② 日常操作
+
+1. 打开任意会话，右侧会出现淡色短横线轨  
+2. **鼠标移上去** → 弹出提问列表  
+3. **点击某条** → 对话滚到对应位置（列表仍在）  
+4. **鼠标移出** → 列表自动收起  
+
+### ③ 改开关 / 前缀
+
+打开：**设置 → 插件 →「Query 定位」**
+
+| 选项 | 作用 |
 | --- | --- |
-| 用户 Query 列表 | 仅 `user/message` 且 `source.kind === 'user'`，过滤 inject / 工具 / 模型回复 |
-| 一键跳转 | 通过 `data-chat-flow-key` 定位消息行，`scrollIntoView` + 约 1.2s 高亮 |
-| 历史入窗 | 目标尚未渲染时，调用会话 `loadOlder()` 翻页后再跳 |
-| 会话隔离 | 跟随当前会话；切换会话自动换列表 |
-| 总开关 | **面板内勾选框**（主路径）；可选写入 settings；支持 Config 默认值 |
-| 清空列表 | 只清插件侧 mask / 展示，**绝不删除原始会话消息** |
-| 存储保护 | 单会话默认最多保留 **200** 条（可配） |
-| 零外网 | Host↔Client 使用 loopback RPC；不新增端口、不对外请求 |
-| 双通道列表 | 优先会话投影 `queryJumpMessages`；无投影时 RPC `list` 增量兜底 |
+| 启用面板 | 总开关；关掉后右侧导航消失 |
+| 自定义符号 / 序号 | 列表开头显示符号还是 `1 2 3…` |
+| 符号内容 | 自定义前缀，最多 8 个字符（默认 🤗） |
+
+也可写在 profile 配置里：
+
+```yaml
+- insert:
+  - id: query-jump
+    name: dsh-query-jump
+    config:
+      enable: true
+      markerStyle: emoji   # 或 number
+      markerSymbol: "🤗"
+      maxQuery: 200
+```
+
+### ④ 卸载
+
+```bash
+dsh plugin --profile web remove dsh-query-jump
+```
+
+重启 `dsh web` 即可。
 
 ---
 
 ## 效果示意
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  DSH WebUI                                                  │
-│  ┌──────────────────────────────┐  ┌──────────────────────┐ │
-│  │                              │  │ ☑ 会话 Query 定位    │ │
-│  │   聊天区域                    │  │ [清空本会话列表]     │ │
-│  │                              │  │──────────────────────│ │
-│  │   ┌────────────────────┐     │  │ 如何配置沙箱策略…    │ │
-│  │   │ 用户提问（高亮中）  │ ◀──┼──│ 帮我总结这段日志     │ │
-│  │   └────────────────────┘     │  │ 再解释一下权限模型   │ │
-│  │                              │  │ …                    │ │
-│  └──────────────────────────────┘  └──────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-         点击右侧条目 → 左侧对话平滑滚到对应消息
+┌──────────────────────────────────────────────┐
+│  DSH 对话区                         ┊ ──     │
+│                                     ┊ ──     │
+│   ┌────────────────────┐            ┊ ██ ←当前│
+│   │ 你的提问气泡        │ ◀──────────┊ ──     │
+│   └────────────────────┘            ┊ ──     │
+│                                     ┊        │
+│                          悬停展开 →  │ 🤗 问A │
+│                                     │ 🤗 问B │
+│                                     │ 🤗 问C │
+└──────────────────────────────────────────────┘
 ```
-
-关闭总开关后，右侧导航隐藏；到 **设置 → 插件 → Query 定位** 可重新开启。
 
 ---
 
-## 架构概览
+## 版本说明
 
-本插件是标准的 **Cordis 双半包**：Node Host + Browser Client，经 DSH profile 的 `cordis.patch.yml` 挂入。
-
-```mermaid
-flowchart LR
-  subgraph Host["Host · lib/index.js"]
-    CFG["Config / settings"]
-    PROJ["sessionProjections<br/>queryJumpMessages"]
-    INC["session/event 增量索引"]
-    RPC["rpc.handle /query-jump<br/>authority: loopback"]
-    CFG --> RPC
-    PROJ --> RPC
-    INC --> RPC
-  end
-
-  subgraph Client["Client · lib/client.js"]
-    UI["shell.overlay 面板"]
-    JUMP["data-chat-flow-key<br/>+ loadOlder"]
-    UI --> JUMP
-  end
-
-  RPC <-->|"rpc.call"| UI
-  PROJ -.->|"useProjection"| UI
-```
-
-| 半边 | 职责 |
+| 版本 | 说明 |
 | --- | --- |
-| **Host** | 折叠 / 采集用户消息；loopback RPC（`getConfig` / `setEnable` / `list` / `clearMask` / `getMask` / `ping`） |
-| **Client** | 右浮层 UI；读投影或轮询 `list`；跳转与高亮；面板开关 |
+| **0.2.0** | 通义风短横线 + 悬停列表；设置页配置启用/前缀；平滑跳转；当前位置浮起高亮 |
+| 0.1.x | 初版能力打磨（安装、持久化、跳转、UI 迭代） |
+
+仓库：[github.com/SocFeng/dsh-query-jump](https://github.com/SocFeng/dsh-query-jump)
 
 ---
 
-## 快速开始
-
-### 环境要求
-
-- Node.js **≥ 20**
-- 已安装 DSH CLI（`@deepseek-ai/dsh`），能运行 `dsh web`
-- 建议从本机 `127.0.0.1` 访问 WebUI（RPC 为 loopback）
-
-### 安装到 web profile
+## 开发
 
 ```bash
-# 1. 进入仓库
-cd dsh-query-jump
-
-# 2. 安装依赖并构建
 npm install
-npm run build
-
-# 3. 链入本机 profile（推荐：改源码后重启即可生效）
-dsh plugin --profile web add link:.
-
-# 也可：
-# dsh plugin --profile web add ./dsh-query-jump
+npm run build   # → lib/index.js · lib/client.js
+npm test
 ```
-
-### 激活
-
-1. **完全重启** `dsh web`（插件集合在进程启动时加载）
-2. 浏览器打开 WebUI 并 **硬刷新**
-3. 右侧应出现「会话 Query 定位」浮层；发几条用户消息后列表会追加
-
-### 卸载
-
-```bash
-dsh plugin --profile web remove dsh-query-jump
-```
-
-重启 `dsh web` 后面板消失。
-
-### 验证配置层是否挂上
-
-```bash
-dsh --profile web --dump-config
-```
-
-输出中应能看到本插件对应的 bundle / patch 层（id：`query-jump`）。
-
----
-
-## 使用说明
-
-| 操作 | 行为 |
-| --- | --- |
-| 鼠标移到对话区右缘 | 滑出「提问记录」（平时几乎不可见） |
-| 点击某条提问 | 平滑滚到对应气泡并短暂高亮 |
-| 点击较早历史 | 必要时先 `loadOlder` 再跳转 |
-| 「清空」 | 仅屏蔽本插件列表（mask），不删聊天 |
-| 切换会话 | 自动换列表；磁盘缓存按会话隔离 |
-| `enable: false` | 不渲染右侧导航；设置页可再开 |
-
----
-
-## 配置项（设置 → 插件 → Query 定位）
-
-打开 **设置 → 插件**，切到 **「Query 定位」** 标签页即可配置（不依赖「插件配置」白名单）：
-
-| 字段 | 类型 | 默认 | 说明 |
-| --- | --- | --- | --- |
-| `enable` | `boolean` | `true` | 总开关；关闭后不显示右侧导航 |
-| `markerStyle` | `'emoji' \| 'number'` | `'emoji'` | 前缀模式：自定义符号 / 序号 |
-| `markerSymbol` | `string` | `'🤗'` | 自定义前缀（最多 8 字符；符号模式下生效） |
-| `maxQuery` | `number` | `200` | 单会话最多保留条数 |
-| `includeSteering` | `boolean` | `false` | 是否纳入 steering |
-
-也可在 profile / `settings.yaml` 中写同名字段：
-
-```yaml
-# cordis.patch.yml / profile 配置
-- insert:
-  - id: query-jump
-    name: dsh-query-jump
-    config:
-      enable: true
-      markerStyle: emoji
-      markerSymbol: "🤗"
-      maxQuery: 200
-```
-
-Host 仍会 `settings.register('dsh-query-jump')` 并尝试 `expose: true`。  
-若本机 DSH 白名单已放行，也可能出现在「插件配置」折叠卡片里；**日常请用「Query 定位」标签页**。
-
-### 定位数据会丢吗？
-
-| 场景 | 结果 |
-| --- | --- |
-| 重启 `dsh web` | **不丢**：投影可从会话日志重建；索引另存 `~/.dsh/storages/query-jump/` |
-| 更新 / 重装插件 | **一般不丢**（磁盘目录仍在） |
-| 点「清空」 | 只写 mask，聊天原文还在 |
-| 删掉整个 `~/.dsh` | 插件缓存没了；会话消息仍在时，投影仍可重建列表 |
-
----
-
-## 项目结构
 
 ```
 dsh-query-jump/
-├── src/
-│   ├── index.ts      # Host：投影 / 持久化 / RPC / settings
-│   ├── client.tsx    # Client：通义风悬停面板
-│   ├── persist.ts    # ~/.dsh/storages/query-jump 落盘
-│   └── text.ts       # 纯函数
-├── lib/
+├── src/          # Host + Client 源码
+├── lib/          # 构建产物
 ├── test/
-├── build.mjs
 ├── cordis.patch.yml
-├── package.json
-└── README.md
+└── package.json
 ```
 
----
-
-## 开发与测试
-
-```bash
-npm install
-npm run build    # 输出 lib/index.js、lib/client.js
-npm test         # 过滤 / 摘要 / 去重 / maxQuery 等纯函数测试
-```
-
-本地联调建议：
-
-1. `dsh plugin --profile web add link:.`
-2. 改代码后 `npm run build`
-3. 重启 `dsh web`（集合变更）或硬刷新（仅 client bundle 内容变更时通常足够）
+本地联调：`link:.` → 改代码 → `npm run build` → 硬刷新（集合变更需重启 `dsh web`）。
 
 ---
 
-## 与 Trajectory / 社区导航的对比
+## 小提示
 
-| 维度 | **QueryJump（本插件）** | DSH Trajectory | 社区 tick-rail 类导航 |
-| --- | --- | --- | --- |
-| UI 形态 | 右侧浮层 **文本列表** | 独立 Tab | 对话右缘短横线 |
-| 内容 | 用户提问摘要 | 全量事件 | 用户消息 tick |
-| 跳转聊天 DOM | 支持 | 不支持 | 支持 |
-| 清空插件索引 | 支持（mask） | — | 通常无 |
-| 总开关 | 面板内开关 | 无 | 视实现而定 |
-| 定位场景 | 「我问过什么 → 点回去」 | 调试 / 审计全事件 | 快速 scrub 阅读位置 |
-
-本插件与 tick-rail **可并存**（投影 key 为 `queryJumpMessages`，不占用他人 key）。
+- 建议本机 `127.0.0.1` 打开 WebUI（RPC 为 loopback）  
+- 很早的历史消息会先翻页再跳，稍等一下就好  
+- 只收录真人提问；注入 / 工具消息不会进列表  
+- 与 Trajectory、其它导航插件可同时使用  
 
 ---
 
-## 边界与已知限制
+## License
 
-1. **DOM 契约**：依赖 `data-chat-flow-key` / `data-chat-flow-kind` / `data-conversation-scroll`；DSH 前端改版后可能需同步选择器。  
-2. **过滤规则**：只收 `source.kind === 'user'` 的 `user/message`；plugin inject、工具通知等不会进列表。  
-3. **窗口化历史**：超长会话需 `loadOlder`；若会话 API 不可用，仅能跳已入窗消息。  
-4. **loopback**：非本机地址访问 WebUI 时面板会提示不可用（安全策略）。  
-5. **busy 时序**：排队中的提问可能尚未落成 `user/message`，列表会略晚于输入框。  
-6. **DSH 仍为 preview**：slot / RPC / 投影细节可能随版本微调。
-
----
-
-## 设计文档
-
-更完整的需求、校对结论、风险与测试矩阵见：
-
-- [fh/dsh-query-jump设计文档.md](./fh/dsh‑query‑jump设计文档.md)
-
----
-
-## 许可证
-
-[MIT](./LICENSE) © dsh-query-jump contributors
-
----
+[MIT](./LICENSE)
 
 <p align="center">
-  <sub>Built for <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a> · Everything is a plugin.</sub>
+  <sub>Made for DeepSeek Harness · Everything is a plugin ♪(´▽｀)</sub>
 </p>
