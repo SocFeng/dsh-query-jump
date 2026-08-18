@@ -1,6 +1,6 @@
 {
   "name": "dsh-query-jump",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "DSH WebUI 会话提问导航：右缘短横线 + 悬停列表，一点跳回对应气泡",
   "license": "MIT",
   "type": "module",

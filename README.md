@@ -2,12 +2,12 @@
 
 # dsh-query-jump
 
-**DSH WebUI 会话提问导航** · `v0.3.0`
+**DSH WebUI 会话提问导航** · `v0.3.1`
 
 长对话里，把「我之前问过什么」找回来  
 `(｡･∀･)ﾉﾞ`
 
-[![version](https://img.shields.io/badge/v0.3.0-indigo?style=for-the-badge&label=release)](https://github.com/SocFeng/dsh-query-jump)
+[![version](https://img.shields.io/badge/v0.3.1-indigo?style=for-the-badge&label=release)](https://github.com/SocFeng/dsh-query-jump)
 [![license](https://img.shields.io/badge/MIT-blue?style=for-the-badge&label=license)](./LICENSE)
 [![dsh](https://img.shields.io/badge/DeepSeek%20Harness-WebUI-111827?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
 
@@ -38,7 +38,7 @@
 | 自定义前缀 | 🤗 / ★ / 序号，自己定 |
 | 设置页 | `设置 → 插件 → Query 定位` |
 | 同步历史提问 | 从会话日志补全安装前未记录的 query |
-| 删除会话 | 永久删除（会话头 / 侧栏菜单） |
+| 删除会话 | 永久删除（会话头 / 侧栏菜单，可开关） |
 | 缓存同步 | 删会话、删工作区、分叉时自动对齐 |
 | 持久化 | 重启、更新后列表通常还在 |
 
@@ -104,6 +104,7 @@ dsh plugin --profile web remove dsh-query-jump
 | :--- | :--- |
 | 启用面板 | 总开关 |
 | 同步历史提问 | 按提问时间线补全未记录的 query |
+| 显示删除会话 | 控制标题栏垃圾桶与侧栏删除入口 |
 | 自定义符号 / 序号 | 列表前缀样式 |
 | 符号内容 | 最多 8 个字符，默认 `🤗` |
 
@@ -116,13 +117,19 @@ config:
   markerSymbol: "🤗"
   maxQuery: 200
   syncHistoricalQueries: true
+  showDeleteSession: true   # false 隐藏删除入口
 ```
 
 ---
 
 ## 版本
 
-**`0.3.0`** — 当前稳定版
+**`0.3.1`** — 当前稳定版
+
+- 修复超长上下文需「加载更早」时点击 query 卡住的问题
+- 设置项「显示删除会话」可开关删除按钮
+
+**`0.3.0`**
 
 - 同步历史提问（按时间线补全未记录 query）
 - 永久删除会话（官方未暴露能力）
@@ -161,7 +168,7 @@ test/    单元测试
 ## 说明
 
 - 建议本机 `127.0.0.1` 访问 WebUI
-- 很早的历史会先翻页再跳，稍等即可
+- 很早的历史会先自动「加载更早」再跳转，稍等即可
 - 不收录注入消息 / 工具事件
 - 可与 Trajectory 等插件并存
 
