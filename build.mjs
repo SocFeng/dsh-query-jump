@@ -26,6 +26,18 @@ await build({
   external: ['@deepseek-ai/schemastery'],
   logLevel: 'info',
 })
+
+for (const entry of ['cleanup', 'persist', 'text', 'fork', 'session-delete', 'backfill']) {
+  await build({
+    entryPoints: [fromRoot(`src/${entry}.ts`)],
+    outfile: fromRoot(`lib/${entry}.js`),
+    bundle: false,
+    platform: 'node',
+    format: 'esm',
+    target: 'node20',
+    logLevel: 'silent',
+  })
+}
 const banner = [
   'window.__ModuleLoader__.load({',
   `  id: ${JSON.stringify(id)},`,

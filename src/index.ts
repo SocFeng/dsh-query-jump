@@ -4,12 +4,21 @@
  * - settings.register：开关持久化（本机 settings；Web「插件配置」受白名单限制）
  * - sessionProjections：从会话日志折叠全量用户提问（重启后打开会话可重建）
  * - ~/.dsh/storages/query-jump/*.json：增量索引 + mask 落盘（重启/更新插件不丢）
+ * - session/created：分叉会话从 seed 折叠 query 列表（seed 不触发 session/event）
  * - loopback RPC `/query-jump`
  */
 
 import Schema from '@deepseek-ai/schemastery'
 import { applyProjectionEvent, type QueryJumpState } from './text.js'
 import { loadSession, saveSession } from './persist.js'
+import { createSessionCacheJanitor } from './cleanup.js'
+import { createForkCacheSeeder } from './fork.js'
+import {
+  SessionDeleteError,
+  deleteSessionPermanently,
+  listSessionsForDelete,
+} from './session-delete.js'
+import { syncSessionQueries } from './backfill.js'
 
 export const name = 'dsh-query-jump'
 export const inject = ['connection']
@@ -23,6 +32,8 @@ export interface Config {
   markerStyle: 'emoji' | 'number'
   /** markerStyle=emoji 时使用的自定义前缀（可任意符号/表情） */
   markerSymbol: string
+  /** 从会话日志补全尚未记录的 query，按提问时间排序 */
+  syncHistoricalQueries: boolean
 }
 
 const CHANNEL = '/query-jump'
@@ -35,6 +46,7 @@ const DEFAULTS: Config = {
   includeSteering: false,
   markerStyle: 'emoji',
   markerSymbol: '🤗',
+  syncHistoricalQueries: true,
 }
 
 const clearMask = new Map<string, Set<string>>()
@@ -60,6 +72,10 @@ function resolveConfig(raw: Partial<Config> | undefined): Config {
       typeof raw?.includeSteering === 'boolean' ? raw.includeSteering : DEFAULTS.includeSteering,
     markerStyle: resolveMarkerStyle(raw?.markerStyle),
     markerSymbol: resolveMarkerSymbol(raw?.markerSymbol),
+    syncHistoricalQueries:
+      typeof raw?.syncHistoricalQueries === 'boolean'
+        ? raw.syncHistoricalQueries
+        : DEFAULTS.syncHistoricalQueries,
   }
 }
 
@@ -73,6 +89,9 @@ export const Config = Schema.object({
   markerSymbol: Schema.string()
     .default(DEFAULTS.markerSymbol)
     .description('自定义前缀符号（markerStyle=emoji 时生效，最多 8 字符）'),
+  syncHistoricalQueries: Schema.boolean()
+    .default(DEFAULTS.syncHistoricalQueries)
+    .description('从会话日志同步尚未记录的 query，按提问时间排序'),
 })
 
 function ok(value: unknown) {
@@ -84,6 +103,7 @@ function badRequest(message: string) {
     error: { code: 'bad-request', message, details: { issues: [] as unknown[] } },
   }
 }
+
 function internalError(error: unknown) {
   return {
     ok: false as const,
@@ -93,6 +113,18 @@ function internalError(error: unknown) {
       details: {},
     },
   }
+}
+
+function fromDeleteError(error: unknown) {
+  if (error instanceof SessionDeleteError) {
+    const code =
+      error.status === 400 ? 'bad-request' : error.status === 404 ? 'not-found' : 'internal'
+    return {
+      ok: false as const,
+      error: { code, message: error.message, details: {} },
+    }
+  }
+  return internalError(error)
 }
 
 type SettingsScope = {
@@ -150,6 +182,26 @@ function schedulePersist(sessionId: string) {
       })
     }, 400),
   )
+}
+
+async function maybeSyncHistorical(
+  ctx: any,
+  sessionId: string,
+  settings: Config,
+): Promise<QueryJumpState> {
+  if (!settings.syncHistoricalQueries) {
+    return incremental.get(sessionId) ?? { messages: [] }
+  }
+  const prev = incremental.get(sessionId) ?? { messages: [] }
+  const { state, changed } = syncSessionQueries(ctx, sessionId, prev, {
+    includeSteering: settings.includeSteering,
+    maxQuery: settings.maxQuery,
+  })
+  if (changed) {
+    incremental.set(sessionId, state)
+    schedulePersist(sessionId)
+  }
+  return state
 }
 
 async function ensureHydrated(sessionId: string) {
@@ -215,6 +267,39 @@ export function apply(ctx: any, config?: Partial<Config>) {
     }
   }
 
+  const janitor = createSessionCacheJanitor({
+    incremental,
+    clearMask,
+    persistTimers,
+    hydrated,
+  })
+
+  ctx.on('session/disposed', janitor.onSessionDisposed)
+  ctx.on('domain/changed', janitor.onDomainChanged)
+
+  if (typeof ctx.inject === 'function') {
+    try {
+      ctx.inject(['storageDomain'], (sctx: any) => {
+        janitor.hydrateWorkspaces(sctx.storageDomain)
+      })
+    } catch (err) {
+      console.warn('[dsh-query-jump] storageDomain inject skipped', err)
+    }
+  }
+
+  const forkSeeder = createForkCacheSeeder({
+    incremental,
+    clearMask,
+    hydrated,
+    schedulePersist,
+    getConfig: () => {
+      const s = readFromScope(settingsScope, live)
+      return { includeSteering: s.includeSteering, maxQuery: s.maxQuery }
+    },
+  })
+
+  ctx.on('session/created', forkSeeder.onSessionCreated)
+
   ctx.on('session/event', (session: any, event: any) => {
     const s = readFromScope(settingsScope, live)
     if (!s.enable) return
@@ -246,6 +331,7 @@ export function apply(ctx: any, config?: Partial<Config>) {
             includeSteering: s.includeSteering,
             markerStyle: s.markerStyle,
             markerSymbol: s.markerSymbol,
+            syncHistoricalQueries: s.syncHistoricalQueries,
             projectionKey: PROJECTION_KEY,
             settingsNamespace: SETTINGS_NS,
           })
@@ -277,9 +363,12 @@ export function apply(ctx: any, config?: Partial<Config>) {
           if (typeof payload?.includeSteering === 'boolean') {
             patch.includeSteering = payload.includeSteering
           }
+          if (typeof payload?.syncHistoricalQueries === 'boolean') {
+            patch.syncHistoricalQueries = payload.syncHistoricalQueries
+          }
           if (Object.keys(patch).length === 0) {
             return badRequest(
-              'setConfig requires enable | markerStyle | markerSymbol | maxQuery | includeSteering',
+              'setConfig requires enable | markerStyle | markerSymbol | maxQuery | includeSteering | syncHistoricalQueries',
             )
           }
           const s = readFromScope(settingsScope, live)
@@ -292,6 +381,7 @@ export function apply(ctx: any, config?: Partial<Config>) {
             markerSymbol: next.markerSymbol,
             maxQuery: next.maxQuery,
             includeSteering: next.includeSteering,
+            syncHistoricalQueries: next.syncHistoricalQueries,
           })
         }
         case 'list': {
@@ -301,8 +391,9 @@ export function apply(ctx: any, config?: Partial<Config>) {
           }
           await ensureHydrated(sessionId)
           const s = readFromScope(settingsScope, live)
+          const state = await maybeSyncHistorical(ctx, sessionId, s)
           const masked = clearMask.get(sessionId) ?? new Set<string>()
-          const messages = (incremental.get(sessionId)?.messages ?? []).filter(
+          const messages = (state.messages ?? []).filter(
             (m) => m.id && !masked.has(String(m.id)),
           )
           return ok({
@@ -310,6 +401,7 @@ export function apply(ctx: any, config?: Partial<Config>) {
             enable: s.enable,
             markerStyle: s.markerStyle,
             markerSymbol: s.markerSymbol,
+            syncHistoricalQueries: s.syncHistoricalQueries,
             messages,
           })
         }
@@ -331,6 +423,24 @@ export function apply(ctx: any, config?: Partial<Config>) {
           }
           await ensureHydrated(sessionId)
           return ok({ sessionId, msgIds: [...(clearMask.get(sessionId) ?? [])] })
+        }
+        case 'listSessions': {
+          const sessions = await listSessionsForDelete(ctx)
+          return ok({ sessions })
+        }
+        case 'deleteSession': {
+          const sessionId = payload?.sessionId
+          if (typeof sessionId !== 'string' || !sessionId.trim()) {
+            return badRequest('sessionId must be a non-empty string')
+          }
+          const id = sessionId.trim()
+          try {
+            const result = await deleteSessionPermanently(ctx, id)
+            janitor.purgeSession(id)
+            return ok({ sessionId: id, ...result })
+          } catch (error) {
+            return fromDeleteError(error)
+          }
         }
         case 'ping':
           return ok({ pong: true })

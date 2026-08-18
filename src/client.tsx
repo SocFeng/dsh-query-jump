@@ -8,6 +8,11 @@
  * - 贴 conversation-scroll 边界
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  DeleteSessionButton,
+  DeleteSessionDialog,
+  installSidebarDeleteMenu,
+} from './session-delete-ui.js'
 
 export const inject = ['slots', 'connection', 'locale']
 
@@ -47,6 +52,27 @@ const zh = {
   markerSymbol: '符号内容',
   markerSymbolHint: '任意文字或表情，最多 8 个字符',
   saved: '已保存',
+  syncHistorical: '同步历史提问',
+  syncHistoricalHint: '从会话日志补全安装插件前未记录的 query，按实际提问时间排序',
+  deleteTitle: '删除会话',
+  deleteCancel: '取消',
+  deleteConfirm: '删除',
+  deleteConfirming: '删除中…',
+  deleteBusy: '正在删除…',
+  deleteUntitled: '未命名会话',
+  deleteSessionLabel: '会话：',
+  deleteSessionIdLabel: '序列号：',
+  deleteRunningWarn: '⚠ 会话正在运行',
+  deleteAck: '我已了解后果，确认删除',
+  deleteNotFoundDesc:
+    '未能在会话列表中找到该会话（可能已被删除或列表尚未刷新），请刷新后重试。',
+  deleteRunningDesc:
+    '该会话正在运行，删除会立即停止其任务并永久删除，正在进行的操作将中断且无法恢复。',
+  deleteDesc:
+    '将永久删除该会话及其全部对话记录（会话日志、统计与工作区记账），此操作不可恢复。',
+  deleteBtn: '删除会话',
+  deleteBtnRunning: '删除会话（运行中，删除将停止任务）',
+  deleteMenu: '删除会话',
 }
 
 type MarkerStyle = 'emoji' | 'number'
@@ -209,6 +235,26 @@ function formatTime(ts: number): string {
 
 type Rpc = { call: (ch: string, endpoint: string, body?: unknown) => Promise<any> }
 
+type QueryMsg = { seq: number; time: number; text: string; id?: string }
+
+function mergeMessagesByTimeline(...sources: QueryMsg[][]): QueryMsg[] {
+  const byId = new Map<string, QueryMsg>()
+  for (const src of sources) {
+    for (const m of src) {
+      if (!m.id) continue
+      const id = String(m.id)
+      const prev = byId.get(id)
+      if (!prev || m.time > prev.time || (m.time === prev.time && m.seq >= prev.seq)) {
+        byId.set(id, m)
+      }
+    }
+  }
+  return [...byId.values()].sort((a, b) => {
+    if (a.time !== b.time) return a.time - b.time
+    return a.seq - b.seq
+  })
+}
+
 function QueryJumpPanel({
   ctx,
   useSessions,
@@ -230,6 +276,7 @@ function QueryJumpPanel({
     | undefined
 
   const [enable, setEnable] = useState(true)
+  const [syncHistoricalQueries, setSyncHistoricalQueries] = useState(true)
   const [markerStyle, setMarkerStyle] = useState<MarkerStyle>('emoji')
   const [markerSymbol, setMarkerSymbol] = useState(DEFAULT_SYMBOL)
   const [mask, setMask] = useState<Set<string>>(() => new Set())
@@ -250,7 +297,12 @@ function QueryJumpPanel({
 
   const items = useMemo(() => {
     const fromProj = (projected?.messages ?? []).filter((m) => m.id && !mask.has(String(m.id)))
-    const source = fromProj.length > 0 ? fromProj : rpcMessages
+    const fromRpc = rpcMessages.filter((m) => m.id && !mask.has(String(m.id)))
+    const source = syncHistoricalQueries
+      ? mergeMessagesByTimeline(fromProj, fromRpc)
+      : fromProj.length > 0
+        ? fromProj
+        : fromRpc
     return source.map(
       (m): Item => ({
         msgId: String(m.id),
@@ -259,7 +311,7 @@ function QueryJumpPanel({
         seq: m.seq,
       }),
     )
-  }, [projected, mask, rpcMessages])
+  }, [projected, mask, rpcMessages, syncHistoricalQueries])
 
   const clearCollapse = () => {
     if (collapseTimer.current != null) {
@@ -362,6 +414,9 @@ function QueryJumpPanel({
   const applyConfigValue = useCallback((value: any) => {
     if (!value || typeof value !== 'object') return
     if (typeof value.enable === 'boolean') setEnable(value.enable)
+    if (typeof value.syncHistoricalQueries === 'boolean') {
+      setSyncHistoricalQueries(value.syncHistoricalQueries)
+    }
     if (value.markerStyle === 'number' || value.markerStyle === 'emoji') {
       setMarkerStyle(value.markerStyle)
     }
@@ -711,6 +766,7 @@ function QueryJumpSettingsTab({
   isLoopback: boolean
 }) {
   const [enable, setEnable] = useState(true)
+  const [syncHistoricalQueries, setSyncHistoricalQueries] = useState(true)
   const [markerStyle, setMarkerStyle] = useState<MarkerStyle>('emoji')
   const [markerSymbol, setMarkerSymbol] = useState(DEFAULT_SYMBOL)
   const [hint, setHint] = useState('')
@@ -721,6 +777,9 @@ function QueryJumpSettingsTab({
       const res = await rpc.call(CHANNEL, 'getConfig', {})
       if (!res?.ok) return
       setEnable(!!res.value.enable)
+      if (typeof res.value.syncHistoricalQueries === 'boolean') {
+        setSyncHistoricalQueries(res.value.syncHistoricalQueries)
+      }
       if (res.value.markerStyle === 'number' || res.value.markerStyle === 'emoji') {
         setMarkerStyle(res.value.markerStyle)
       }
@@ -737,12 +796,20 @@ function QueryJumpSettingsTab({
   }, [load])
 
   const save = useCallback(
-    async (patch: { enable?: boolean; markerStyle?: MarkerStyle; markerSymbol?: string }) => {
+    async (patch: {
+      enable?: boolean
+      syncHistoricalQueries?: boolean
+      markerStyle?: MarkerStyle
+      markerSymbol?: string
+    }) => {
       if (!isLoopback) return
       try {
         const res = await rpc.call(CHANNEL, 'setConfig', patch)
         if (!res?.ok) return
         if (typeof res.value.enable === 'boolean') setEnable(res.value.enable)
+        if (typeof res.value.syncHistoricalQueries === 'boolean') {
+          setSyncHistoricalQueries(res.value.syncHistoricalQueries)
+        }
         if (res.value.markerStyle === 'number' || res.value.markerStyle === 'emoji') {
           setMarkerStyle(res.value.markerStyle)
         }
@@ -790,6 +857,18 @@ function QueryJumpSettingsTab({
           />
           {t('enable')}
         </label>
+      </div>
+
+      <div style={row}>
+        <label style={{ ...label, display: 'flex', alignItems: 'center', gap: 8, fontWeight: 500 }}>
+          <input
+            type="checkbox"
+            checked={syncHistoricalQueries}
+            onChange={(e) => void save({ syncHistoricalQueries: e.target.checked })}
+          />
+          {t('syncHistorical')}
+        </label>
+        <div style={hintStyle}>{t('syncHistoricalHint')}</div>
       </div>
 
       <div style={row}>
@@ -863,6 +942,17 @@ export function apply(ctx: any) {
     /* fallback */
   }
 
+  let sessionsSvc: any = ctx.get?.('sessions') ?? null
+  if (!sessionsSvc && typeof ctx.inject === 'function') {
+    try {
+      ctx.inject(['sessions'], (sub: any) => {
+        sessionsSvc = sub.sessions
+      })
+    } catch {
+      /* ignore */
+    }
+  }
+
   ctx.slots.inject('shell.overlay', () =>
     ctx.slots.register(
       { name: 'shell.overlay', id: 'query-jump', order: 110 },
@@ -877,6 +967,41 @@ export function apply(ctx: any) {
         }),
     ),
   )
+
+  ctx.slots.inject('shell.overlay', () =>
+    ctx.slots.register(
+      { name: 'shell.overlay', id: 'query-jump-delete-dialog', order: 120 },
+      () =>
+        React.createElement(DeleteSessionDialog, {
+          rpc,
+          isLoopback,
+          sessionsSvc,
+          t,
+        }),
+    ),
+  )
+
+  ctx.slots.inject('conversation.session.header.actions', () =>
+    ctx.slots.register(
+      {
+        name: 'conversation.session.header.actions',
+        id: 'query-jump-delete',
+        order: 30,
+      },
+      (props: any) =>
+        React.createElement(DeleteSessionButton, {
+          sessionId: props.sessionId,
+          useSessions: props.useSessions,
+          t,
+        }),
+    ),
+  )
+
+  try {
+    installSidebarDeleteMenu(t)
+  } catch {
+    /* ignore */
+  }
 
   // 设置 → 插件 → 独立 Tab（不走 WEB_SETTINGS_NAMESPACES 白名单）
   try {
