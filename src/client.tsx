@@ -22,7 +22,6 @@ const PROJECTION_KEY = 'queryJumpMessages'
 const FLOW_KEY = 'data-chat-flow-key'
 const FLOW_KIND = 'data-chat-flow-kind'
 const SCROLL_SEL = '[data-conversation-scroll]'
-const FULL_LOAD_PAGES = 120
 
 const RAIL_W = 22
 const TICK_GAP = 8
@@ -104,23 +103,68 @@ function findRowByMsgId(msgId: string): HTMLElement | null {
   return null
 }
 
-function windowHasId(snap: any, id: string): boolean {
-  try {
-    if (!snap?.chat?.order || !snap?.chat?.nodes) return false
-    for (const k of snap.chat.order) {
-      const n = snap.chat.nodes.get(k)
-      if (n != null && String(n.id) === String(id)) return true
-    }
-  } catch {
-    /* ignore */
+const FULL_LOAD_PAGES = 400
+const LOAD_TIMEOUT_MS = 45000
+
+function sessionIdVariants(sessionId: string): string[] {
+  const id = String(sessionId || '').trim()
+  if (!id) return []
+  const variants = new Set<string>([id])
+  if (id.startsWith('session-')) variants.add(id.slice('session-'.length))
+  else if (/^[0-9a-f-]{36}$/i.test(id)) variants.add(`session-${id}`)
+  return [...variants]
+}
+
+function resolveSessionFace(ctx: any, sessionId: string): any {
+  const sessions = ctx.get?.('sessions') ?? ctx.sessions
+  if (!sessions?.binding) return null
+  for (const variant of sessionIdVariants(sessionId)) {
+    const face = sessions.binding(variant)?.session
+    if (face) return face
+  }
+  return null
+}
+
+function snapshotHasMsgId(snap: any, id: string): boolean {
+  if (!snap?.chat?.order || !snap?.chat?.nodes) return false
+  const want = String(id)
+  for (const k of snap.chat.order) {
+    const n = snap.chat.nodes.get(k)
+    if (!n) continue
+    if (String(n.id) === want) return true
+    if (String(n.key ?? '').includes(want)) return true
+    const data = n.data as { messageId?: unknown; seq?: number } | undefined
+    if (data && String(data.messageId ?? '') === want) return true
   }
   return false
 }
 
-async function loadUntilIdLoaded(face: any, id: string) {
+function minAnchorSeqInWindow(snap: any): number | null {
+  let min: number | null = null
+  for (const k of snap?.chat?.order ?? []) {
+    const n = snap.chat.nodes.get(k)
+    if (!n) continue
+    const seq =
+      typeof n.anchorSeq === 'number'
+        ? n.anchorSeq
+        : typeof (n.data as { seq?: number } | undefined)?.seq === 'number'
+          ? (n.data as { seq: number }).seq
+          : null
+    if (seq != null) min = min === null ? seq : Math.min(min, seq)
+  }
+  return min
+}
+
+function windowHasId(snap: any, id: string): boolean {
+  return snapshotHasMsgId(snap, id)
+}
+
+async function loadUntilIdLoaded(face: any, id: string, targetSeq?: number) {
+  const deadline = Date.now() + LOAD_TIMEOUT_MS
   let pages = 0
-  let guard = 0
-  while (guard++ < 300) {
+  let stallRounds = 0
+
+  while (Date.now() < deadline) {
     let snap: any
     try {
       snap = face.getSnapshot()
@@ -128,23 +172,68 @@ async function loadUntilIdLoaded(face: any, id: string) {
       return
     }
     if (!snap || snap.openState === 'error') return
-    if (snap.openState !== 'open') {
-      await delay(120)
+
+    if (snap.openState === 'cold') {
+      try {
+        await face.open()
+      } catch {
+        return
+      }
+      await delay(80)
       continue
     }
-    if (windowHasId(snap, id)) return
+    if (snap.openState !== 'open') {
+      await delay(80)
+      continue
+    }
+
+    if (snapshotHasMsgId(snap, id)) return
+
+    if (typeof targetSeq === 'number') {
+      const minSeq = minAnchorSeqInWindow(snap)
+      if (minSeq != null && minSeq <= targetSeq) return
+    }
+
     if (snap.hasMore !== true) return
     if (snap.loadingOlder === true) {
-      await delay(50)
+      await delay(60)
       continue
     }
+
+    const minBefore = minAnchorSeqInWindow(snap)
     try {
       await face.loadOlder()
     } catch {
       return
     }
-    if (++pages >= FULL_LOAD_PAGES) return
+    pages++
+    await delay(48)
+
+    let after: any
+    try {
+      after = face.getSnapshot()
+    } catch {
+      return
+    }
+    const minAfter = minAnchorSeqInWindow(after)
+    if (minBefore != null && minAfter === minBefore && after?.hasMore === true) {
+      stallRounds++
+      if (stallRounds >= 3) return
+    } else {
+      stallRounds = 0
+    }
+
+    if (pages >= FULL_LOAD_PAGES) return
   }
+}
+
+async function waitForRow(msgId: string, attempts = 80): Promise<HTMLElement | null> {
+  for (let i = 0; i < attempts; i++) {
+    const row = findRowByMsgId(msgId)
+    if (row) return row
+    await delay(40)
+  }
+  return findRowByMsgId(msgId)
 }
 
 /** 滚到目标行；先平滑过渡，再短暂压制流式贴底，避免动画被掐断 */
@@ -482,7 +571,7 @@ function QueryJumpPanel({
     return () => window.clearInterval(tmr)
   }, [refreshList, sessionId, isLoopback])
 
-  const onJump = async (msgId: string, idxInAll?: number) => {
+  const onJump = async (msgId: string, idxInAll?: number, targetSeq?: number) => {
     if (!sessionId) return
     const gen = ++jumpGenRef.current
     releaseHoldRef.current?.()
@@ -490,25 +579,15 @@ function QueryJumpPanel({
     try {
       if (typeof idxInAll === 'number') {
         setActiveIdx(idxInAll)
-        // 仅锁定阅读线高亮，不阻挡列表悬停收起
         pinUntilRef.current = Date.now() + Math.max(JUMP_PIN_MS, SCROLL_HOLD_MS)
       }
       let row = findRowByMsgId(msgId)
       if (!row) {
-        let face: any = null
-        try {
-          face = ctx.sessions?.binding?.(sessionId)?.session ?? null
-        } catch {
-          face = null
-        }
+        const face = resolveSessionFace(ctx, sessionId)
         if (face) {
-          await loadUntilIdLoaded(face, msgId)
+          await loadUntilIdLoaded(face, msgId, targetSeq)
           if (gen !== jumpGenRef.current) return
-          let tries = 0
-          while (tries++ < 20 && !row) {
-            row = findRowByMsgId(msgId)
-            if (!row) await delay(60)
-          }
+          row = await waitForRow(msgId)
         }
       }
       if (gen !== jumpGenRef.current) return
@@ -611,7 +690,7 @@ function QueryJumpPanel({
                 key={it.msgId}
                 type="button"
                 title={it.query.slice(0, 120)}
-                onClick={() => void onJump(it.msgId, idx)}
+                onClick={() => void onJump(it.msgId, idx, it.seq)}
                 style={{
                   position: 'absolute',
                   left: active ? 4 : 6,
@@ -659,7 +738,7 @@ function QueryJumpPanel({
                 type="button"
                 data-qj-idx={idx}
                 title={item.query}
-                onClick={() => void onJump(item.msgId, idx)}
+                onClick={() => void onJump(item.msgId, idx, item.seq)}
                 style={{
                   ...rowStyle,
                   background: active ? 'var(--dsw-alias-bg-layer-3, #fff)' : 'transparent',
