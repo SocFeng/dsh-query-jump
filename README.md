@@ -7,7 +7,7 @@
 长对话里，把「我之前问过什么」找回来  
 `(｡･∀･)ﾉﾞ`
 
-[![version](https://img.shields.io/badge/v0.3.1-indigo?style=for-the-badge&label=release)](https://github.com/SocFeng/dsh-query-jump)
+[![version](https://img.shields.io/badge/v0.3.1-indigo?style=for-the-badge&label=release)](https://github.com/SocFeng/dsh-query-jump/releases/latest)
 [![license](https://img.shields.io/badge/MIT-blue?style=for-the-badge&label=license)](./LICENSE)
 [![dsh](https://img.shields.io/badge/DeepSeek%20Harness-WebUI-111827?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
 
@@ -124,25 +124,11 @@ config:
 
 ## 版本
 
-**`0.3.1`** — 当前稳定版
+当前稳定版：**`0.3.1`**
 
-- 修复超长上下文需「加载更早」时点击 query 卡住的问题
-- 设置项「显示删除会话」可开关删除按钮
+完整变更记录见 **[CHANGELOG.md](./CHANGELOG.md)**。GitHub 上只维护 [Latest release](https://github.com/SocFeng/dsh-query-jump/releases/latest) 一条说明；历史版本不再单独建 Release。
 
-**`0.3.0`**
-
-- 同步历史提问（按时间线补全未记录 query）
-- 永久删除会话（官方未暴露能力）
-- 删会话 / 删工作区 / 分叉时缓存自动同步
-
-**`0.2.0`**
-
-- 通义风短横线 + 悬停列表
-- 设置页配置启用与前缀
-- 平滑跳转 · 当前位置浮起高亮
-- 重启持久化
-
-`0.1.x` 为早期迭代。
+发版时：`bump version` → push → `git tag vX.Y.Z` → 新建一个 Release，notes 从 CHANGELOG 复制（模板见 [`.github/release-template.md`](./.github/release-template.md)）。
 
 ---
 
