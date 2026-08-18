@@ -9,9 +9,10 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  DeleteSessionButton,
+  DeleteSessionButtonGate,
   DeleteSessionDialog,
   installSidebarDeleteMenu,
+  setSidebarDeleteEnabled,
 } from './session-delete-ui.js'
 
 export const inject = ['slots', 'connection', 'locale']
@@ -53,6 +54,8 @@ const zh = {
   saved: '已保存',
   syncHistorical: '同步历史提问',
   syncHistoricalHint: '从会话日志补全安装插件前未记录的 query，按实际提问时间排序',
+  showDeleteSession: '显示删除会话',
+  showDeleteSessionHint: '在会话标题栏与侧栏菜单显示删除入口',
   deleteTitle: '删除会话',
   deleteCancel: '取消',
   deleteConfirm: '删除',
@@ -846,6 +849,7 @@ function QueryJumpSettingsTab({
 }) {
   const [enable, setEnable] = useState(true)
   const [syncHistoricalQueries, setSyncHistoricalQueries] = useState(true)
+  const [showDeleteSession, setShowDeleteSession] = useState(true)
   const [markerStyle, setMarkerStyle] = useState<MarkerStyle>('emoji')
   const [markerSymbol, setMarkerSymbol] = useState(DEFAULT_SYMBOL)
   const [hint, setHint] = useState('')
@@ -858,6 +862,10 @@ function QueryJumpSettingsTab({
       setEnable(!!res.value.enable)
       if (typeof res.value.syncHistoricalQueries === 'boolean') {
         setSyncHistoricalQueries(res.value.syncHistoricalQueries)
+      }
+      if (typeof res.value.showDeleteSession === 'boolean') {
+        setShowDeleteSession(res.value.showDeleteSession)
+        setSidebarDeleteEnabled(res.value.showDeleteSession)
       }
       if (res.value.markerStyle === 'number' || res.value.markerStyle === 'emoji') {
         setMarkerStyle(res.value.markerStyle)
@@ -878,6 +886,7 @@ function QueryJumpSettingsTab({
     async (patch: {
       enable?: boolean
       syncHistoricalQueries?: boolean
+      showDeleteSession?: boolean
       markerStyle?: MarkerStyle
       markerSymbol?: string
     }) => {
@@ -888,6 +897,10 @@ function QueryJumpSettingsTab({
         if (typeof res.value.enable === 'boolean') setEnable(res.value.enable)
         if (typeof res.value.syncHistoricalQueries === 'boolean') {
           setSyncHistoricalQueries(res.value.syncHistoricalQueries)
+        }
+        if (typeof res.value.showDeleteSession === 'boolean') {
+          setShowDeleteSession(res.value.showDeleteSession)
+          setSidebarDeleteEnabled(res.value.showDeleteSession)
         }
         if (res.value.markerStyle === 'number' || res.value.markerStyle === 'emoji') {
           setMarkerStyle(res.value.markerStyle)
@@ -948,6 +961,18 @@ function QueryJumpSettingsTab({
           {t('syncHistorical')}
         </label>
         <div style={hintStyle}>{t('syncHistoricalHint')}</div>
+      </div>
+
+      <div style={row}>
+        <label style={{ ...label, display: 'flex', alignItems: 'center', gap: 8, fontWeight: 500 }}>
+          <input
+            type="checkbox"
+            checked={showDeleteSession}
+            onChange={(e) => void save({ showDeleteSession: e.target.checked })}
+          />
+          {t('showDeleteSession')}
+        </label>
+        <div style={hintStyle}>{t('showDeleteSessionHint')}</div>
       </div>
 
       <div style={row}>
@@ -1068,9 +1093,11 @@ export function apply(ctx: any) {
         order: 30,
       },
       (props: any) =>
-        React.createElement(DeleteSessionButton, {
+        React.createElement(DeleteSessionButtonGate, {
           sessionId: props.sessionId,
           useSessions: props.useSessions,
+          rpc,
+          isLoopback,
           t,
         }),
     ),

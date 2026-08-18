@@ -34,6 +34,8 @@ export interface Config {
   markerSymbol: string
   /** 从会话日志补全尚未记录的 query，按提问时间排序 */
   syncHistoricalQueries: boolean
+  /** 是否在会话头 / 侧栏显示删除会话入口 */
+  showDeleteSession: boolean
 }
 
 const CHANNEL = '/query-jump'
@@ -47,6 +49,7 @@ const DEFAULTS: Config = {
   markerStyle: 'emoji',
   markerSymbol: '🤗',
   syncHistoricalQueries: true,
+  showDeleteSession: true,
 }
 
 const clearMask = new Map<string, Set<string>>()
@@ -76,6 +79,10 @@ function resolveConfig(raw: Partial<Config> | undefined): Config {
       typeof raw?.syncHistoricalQueries === 'boolean'
         ? raw.syncHistoricalQueries
         : DEFAULTS.syncHistoricalQueries,
+    showDeleteSession:
+      typeof raw?.showDeleteSession === 'boolean'
+        ? raw.showDeleteSession
+        : DEFAULTS.showDeleteSession,
   }
 }
 
@@ -92,6 +99,9 @@ export const Config = Schema.object({
   syncHistoricalQueries: Schema.boolean()
     .default(DEFAULTS.syncHistoricalQueries)
     .description('从会话日志同步尚未记录的 query，按提问时间排序'),
+  showDeleteSession: Schema.boolean()
+    .default(DEFAULTS.showDeleteSession)
+    .description('显示删除会话按钮（会话标题栏与侧栏菜单）'),
 })
 
 function ok(value: unknown) {
@@ -332,6 +342,7 @@ export function apply(ctx: any, config?: Partial<Config>) {
             markerStyle: s.markerStyle,
             markerSymbol: s.markerSymbol,
             syncHistoricalQueries: s.syncHistoricalQueries,
+            showDeleteSession: s.showDeleteSession,
             projectionKey: PROJECTION_KEY,
             settingsNamespace: SETTINGS_NS,
           })
@@ -366,9 +377,12 @@ export function apply(ctx: any, config?: Partial<Config>) {
           if (typeof payload?.syncHistoricalQueries === 'boolean') {
             patch.syncHistoricalQueries = payload.syncHistoricalQueries
           }
+          if (typeof payload?.showDeleteSession === 'boolean') {
+            patch.showDeleteSession = payload.showDeleteSession
+          }
           if (Object.keys(patch).length === 0) {
             return badRequest(
-              'setConfig requires enable | markerStyle | markerSymbol | maxQuery | includeSteering | syncHistoricalQueries',
+              'setConfig requires enable | markerStyle | markerSymbol | maxQuery | includeSteering | syncHistoricalQueries | showDeleteSession',
             )
           }
           const s = readFromScope(settingsScope, live)
@@ -382,6 +396,7 @@ export function apply(ctx: any, config?: Partial<Config>) {
             maxQuery: next.maxQuery,
             includeSteering: next.includeSteering,
             syncHistoricalQueries: next.syncHistoricalQueries,
+            showDeleteSession: next.showDeleteSession,
           })
         }
         case 'list': {

@@ -361,6 +361,62 @@ export function DeleteSessionDialog({
   )
 }
 
+let sidebarDeleteEnabled = true
+
+export function setSidebarDeleteEnabled(enabled: boolean) {
+  sidebarDeleteEnabled = enabled
+  if (!enabled) {
+    for (const el of document.querySelectorAll('[data-query-jump-delete]')) {
+      const prev = el.previousElementSibling
+      if (prev?.tagName === 'DIV') prev.remove()
+      el.remove()
+    }
+  }
+}
+
+export function DeleteSessionButtonGate({
+  sessionId,
+  useSessions,
+  rpc,
+  isLoopback,
+  t,
+}: {
+  sessionId: string
+  useSessions: (sel: (s: any) => any) => any
+  rpc: Rpc
+  isLoopback: boolean
+  t: (k: string) => string
+}) {
+  const [show, setShow] = useState(true)
+
+  useEffect(() => {
+    if (!isLoopback) {
+      setShow(false)
+      setSidebarDeleteEnabled(false)
+      return
+    }
+    const load = async () => {
+      try {
+        const res = await rpc.call(CHANNEL, 'getConfig', {})
+        if (!res?.ok) return
+        const next = res.value.showDeleteSession !== false
+        setShow(next)
+        setSidebarDeleteEnabled(next)
+      } catch {
+        /* ignore */
+      }
+    }
+    void load()
+    const tmr = window.setInterval(() => void load(), 3000)
+    return () => window.clearInterval(tmr)
+  }, [rpc, isLoopback])
+
+  if (!show) return null
+  return (
+    <DeleteSessionButton sessionId={sessionId} useSessions={useSessions} t={t} />
+  )
+}
+
 export function DeleteSessionButton({
   sessionId,
   useSessions,
@@ -422,6 +478,7 @@ export function installSidebarDeleteMenu(t: (k: string) => string) {
   ;(window as any).__queryJumpSidebarDeleteInstalled = true
 
   const ensureItem = () => {
+    if (!sidebarDeleteEnabled) return
     const menu = document.querySelector('[role=menu]')
     if (!menu || menu.querySelector('[data-query-jump-delete]')) return
     const row = findOpenSessionRow()
